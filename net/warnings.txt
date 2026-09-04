@@ -1,0 +1,27 @@
+Warning: Discarding unusable type 'railway.platform' (first occurrence for edge '473574176').
+Warning: Removing pt stop '431524247' on non existing edge '549187829'.
+Warning: Removing pt stop '5760197790' on non existing edge '607901262#0'.
+Warning: Removing pt stop '5760197792' on non existing edge '607901262#1'.
+Warning: Removing pt stop '5760197793' on non existing edge '607901263'.
+Warning: Removing pt stop '850782866' on non existing edge '133876199#0'.
+Warning: PT line in relation 6858376 with no stops ignored. Probably OSM file is incomplete.
+Warning: PT line in relation 17327787 with no stops ignored. Probably OSM file is incomplete.
+Warning: PT line in relation 17327845 with no stops ignored. Probably OSM file is incomplete.
+Warning: No way found for reference '12084317625' in relation '17891512'
+Warning: Cannot revise pt stop localization for pt line '17038841', which has no route edges. Ignoring!
+Warning: Removed invalid stop '5760197793' from line '17038841'.
+Warning: Removed invalid stop '5760197792' from line '17038841'.
+Warning: Removed invalid stop '5760197790' from line '17038841'.
+Warning: Cannot revise pt stop localization for pt line '17038842', which has no route edges. Ignoring!
+Warning: Removed invalid stop '850782866' from line '17038842'.
+Warning: Removed invalid stop '850782880' from line '17038842'.
+Warning: Cannot revise pt stop localization for pt line '1798771', which has no route edges. Ignoring!
+Warning: Cannot revise pt stop localization for pt line '7841331', which has no route edges. Ignoring!
+Warning: Not joining junctions 11187974841,11494414328,11494414329,11494414330 (it contains a pt stop edge).
+Warning: Speed of turning connection '1167298925_1->1332592276_1' reduced by 22.59 due to turning radius of 4.89 (length=5.46, angle=91.43).
+Warning: Speed of turning connection '1167293942_1->1167298925_1' reduced by 22.53 due to turning radius of 5.01 (length=5.49, angle=88.73).
+Warning: Speed of turning connection '1332592277_1->1167293942_1' reduced by 22.63 due to turning radius of 4.83 (length=5.35, angle=91.10).
+Warning: Speed of turning connection '1332592276_1->1332592277_1' reduced by 22.45 due to turning radius of 5.17 (length=5.62, angle=88.74).
+Warning: Removed 6 pt stops because they could not be assigned to the network
+Warning: 12 total messages of type: Removed invalid stop '%' from line '%'.
+Warning: 12 total messages of type: Removing pt stop '%' on non existing edge '%'.
