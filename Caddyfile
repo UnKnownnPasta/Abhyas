@@ -1,0 +1,20 @@
+# TLS terminator for the interface.
+#
+# Two things it has to get right beyond plain proxying:
+#   1. websockets - /ws carries the sim frames and /ws/voice carries mic audio.
+#      Caddy passes Upgrade through natively so there's no directive for it,
+#      but anything swapped in for Caddy must.
+#   2. long lived upstream - frames stream forever and a validation run can
+#      hold a request open for minutes, so the usual 30-60s read timeout goes.
+
+{$ABHYAS_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy app:8000 {
+		flush_interval -1
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+}

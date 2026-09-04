@@ -1,0 +1,36 @@
+# Build context is Abhyas/, which has a lot in it that must not ship.
+
+# Keys go in as environment variables instead, see compose.yaml.
+.env
+*.env
+!.env.example
+
+# host virtualenv - hundreds of MB, wrong platform, pip rebuilds it in the image
+venv/
+.venv/
+
+# the teammate's separate raylib viewer, not part of this service
+simulation-teammate/
+
+.claude/
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# built at image build time from net/*.osm.xml. Shipping the host's copy would
+# bake in whatever state this machine's build dir happened to be in.
+interactive-ui/build/
+
+# run output. mount a volume if you want it to survive.
+interactive-ui/results/
+interactive-ui/tools/diagnostics/
+
+# n8n collection workflow - that's data collection, not the service
+abhyas_merged_collection_workflow.json
+abhyas_merged_collection_workflow.json.bak
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/

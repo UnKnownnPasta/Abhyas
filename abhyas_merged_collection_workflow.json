@@ -1,0 +1,571 @@
+{
+  "name": "Abhyas - Merged Collection (Travel Time + Flow + Incidents, indiranagar_cmh)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/15 6-21 * * *"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * *"
+            }
+          ]
+        }
+      },
+      "id": "b2e2b222-0000-4000-8000-000000000001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        0
+      ],
+      "notes": "Two rules = 65 executions/day, matching the original collection's observed cadence (06:00-22:00, 15 min apart, last one at 22:00 only)."
+    },
+    {
+      "parameters": {
+        "jsCode": "/* Corridors sampled for travel time.\n *\n * Each junction is described once, by the four points where its arms are\n * sampled.  Every arm has that point twice, because these roads are divided:\n * `in` sits on the carriageway that APPROACHES the junction, `out` on the one\n * that LEAVES it.  Getting that pair the wrong way round is what made TomTom\n * route SN over 892 m and EW over 664 m when the straight drive is ~400 m --\n * it was sending the car up to a U-turn gap and back, and those two movements\n * could not be compared against the model at all.\n *\n * Two further guards against the same failure:\n *   - every route is forced through `centre`, so it cannot go around the block;\n *   - every route carries `heading`, the compass direction the vehicle is\n *     already travelling at the origin, so it cannot open with a U-turn.\n *\n * `expected_m` is what the drive should measure if it goes the direct way.\n * Compare it against the returned lengthInMeters: a ratio much above 1 means\n * the route detoured and that row is not measuring the movement it claims to.\n */\n\nconst JUNCTIONS = {\n  indiranagar_cmh: {\n    centre: '12.9784417,77.6409480',\n    arms: {\n      // out taken off the northbound polyline TomTom returned, not derived:\n      // the northbound lanes sit at lon 77.64070 at +200 m, while both\n      // coordinates tried before (77.64104, 77.64086) were 25-35 m east of\n      // them, on the southbound carriageway.  Arrival was heading SOUTH.\n      N: { in: '12.9802403,77.6410403', out: '12.98024,77.64070' },\n      S: { in: '12.9766431,77.6408557', out: '12.9766431,77.6410403' },\n      E: { in: '12.9783518,77.6427938', out: '12.9785316,77.6427938' },\n      // out off the westbound polyline: westbound lanes sit at lat 12.97824\n      // by lon 77.63910, eastbound at 12.97834-12.97836.  The old value\n      // (12.97835) was eastbound, so EW and SW drove 125 m past it, turned,\n      // and came back east.  Same fault the N arm had.\n      W: { in: '12.9785316,77.6391022', out: '12.97824,77.63910' },\n    },\n    // Only the modelled junction samples turns; see the note on quota below.\n    turns: true,\n  },\n  ejipura: {\n    centre: '12.9386370,77.6338840',\n    arms: {\n      N: { in: '12.9404356,77.6334763', out: '12.9404356,77.6332917' },\n      S: { in: '12.9368384,77.6332917', out: '12.9368384,77.6334763' },\n      E: { in: '12.9385471,77.6352295', out: '12.9387269,77.6352295' },\n      W: { in: '12.9387269,77.6315385', out: '12.9385471,77.6315385' },\n    },\n    turns: false,\n  },\n  sonyworld: {\n    centre: '12.9366906,77.6264514',\n    arms: {\n      N: { in: '12.9384892,77.6265437', out: '12.9384892,77.6263591' },\n      S: { in: '12.934892,77.6263591',  out: '12.934892,77.6265437'  },\n      E: { in: '12.9366007,77.6282969', out: '12.9367805,77.6282969' },\n      W: { in: '12.9367805,77.6246059', out: '12.9366007,77.6246059' },\n    },\n    turns: false,\n  },\n};\n\nconst THROUGH = [['N','S'], ['S','N'], ['E','W'], ['W','E']];\nconst TURNS   = [['N','E'], ['N','W'], ['S','E'], ['S','W'],\n                 ['E','N'], ['E','S'], ['W','N'], ['W','S']];\n\nconst rad = (d) => (d * Math.PI) / 180;\nconst parse = (s) => s.split(',').map(Number);\n\n/* Compass bearing in degrees, 0 = true north, clockwise. */\nfunction bearing(from, to) {\n  const [lat1, lon1] = parse(from);\n  const [lat2, lon2] = parse(to);\n  const p1 = rad(lat1), p2 = rad(lat2), dl = rad(lon2 - lon1);\n  const y = Math.sin(dl) * Math.cos(p2);\n  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);\n  return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360) % 360;\n}\n\n/* Great-circle metres between two \"lat,lon\" strings. */\nfunction metres(from, to) {\n  const [lat1, lon1] = parse(from);\n  const [lat2, lon2] = parse(to);\n  const R = 6371000;\n  const p1 = rad(lat1), p2 = rad(lat2);\n  const dp = rad(lat2 - lat1), dl = rad(lon2 - lon1);\n  const h = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;\n  return Math.round(2 * R * Math.asin(Math.sqrt(h)));\n}\n\nconst out = [];\nfor (const [junction, spec] of Object.entries(JUNCTIONS)) {\n  const pairs = spec.turns ? THROUGH.concat(TURNS) : THROUGH;\n  for (const [from, to] of pairs) {\n    const orig = spec.arms[from].in;\n    const dest = spec.arms[to].out;\n    const via  = spec.centre;\n    out.push({ json: {\n      move_id: junction + '_' + from + to,\n      junction,\n      movement: from + to,\n      movement_kind: THROUGH.some((p) => p[0] === from && p[1] === to) ? 'through' : 'turn',\n      from_arm: from,\n      to_arm: to,\n      orig, dest, via,\n      // Heading on the first leg, so TomTom departs the way the traffic does.\n      heading: bearing(orig, via),\n      // Direct road distance: in to the junction, then out again.\n      expected_m: metres(orig, via) + metres(via, dest),\n    }});\n  }\n}\nreturn out;"
+      },
+      "id": "b2e2b222-0000-4000-8000-000000000002",
+      "name": "Set Points",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        0
+      ],
+      "jsCode": "const POINTS = [\n  {move_id:'indiranagar_cmh_NS', junction:'indiranagar_cmh', movement:'NS', orig:'12.9802403,77.6410403', dest:'12.9766431,77.6410403'},\n  {move_id:'indiranagar_cmh_SN', junction:'indiranagar_cmh', movement:'SN', orig:'12.9766431,77.6408557', dest:'12.9802403,77.6408557'},\n  {move_id:'indiranagar_cmh_EW', junction:'indiranagar_cmh', movement:'EW', orig:'12.9783518,77.6427938', dest:'12.9783518,77.6391022'},\n  {move_id:'indiranagar_cmh_WE', junction:'indiranagar_cmh', movement:'WE', orig:'12.9785316,77.6391022', dest:'12.9785316,77.6427938'},\n];\nreturn POINTS.map((p) => ({ json: { ...p } }));"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.tomtom.com/routing/1/calculateRoute/{{ $json.orig }}:{{ $json.dest }}/json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "traffic",
+              "value": "true"
+            },
+            {
+              "name": "routeType",
+              "value": "fastest"
+            },
+            {
+              "name": "computeTravelTimeFor",
+              "value": "all"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "b2e2b222-0000-4000-8000-000000000003",
+      "name": "Calculate Route (TomTom)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        320,
+        0
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "queryAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "TomTom API Key (query auth)"
+        }
+      },
+      "notes": "Create your OWN Query Auth credential here with YOUR OWN TomTom API key (not the shared one), so this account draws against its own separate 2,500/day TomTom quota."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const source = $('Set Points').all();\nconst output = [];\n\nfor (const item of $input.all()) {\n  const srcIdx = item.pairedItem && typeof item.pairedItem.item === 'number' ? item.pairedItem.item : 0;\n  const src = source[srcIdx] ? source[srcIdx].json : {};\n  const body = item.json || {};\n  const now = DateTime.now();\n\n  let lengthInMeters = null, travelTimeInSeconds = null, historicTravelTimeInSeconds = null,\n      noTrafficTravelTimeInSeconds = null, trafficDelayInSeconds = null, departureTime = null,\n      errorMsg = null, httpStatus = 200;\n\n  if (body.routes && body.routes[0] && body.routes[0].summary) {\n    const s = body.routes[0].summary;\n    lengthInMeters = s.lengthInMeters;\n    travelTimeInSeconds = s.travelTimeInSeconds;\n    historicTravelTimeInSeconds = s.historicTrafficTravelTimeInSeconds;\n    noTrafficTravelTimeInSeconds = s.noTrafficTravelTimeInSeconds;\n    trafficDelayInSeconds = s.trafficDelayInSeconds;\n    departureTime = s.departureTime;\n  } else {\n    errorMsg = 'no summary (status null) :: ' + JSON.stringify(body).slice(0, 250);\n    httpStatus = null;\n  }\n\n  // A route that comes back much longer than the direct drive did not measure\n  // the movement it claims to -- it went around the median.  That is exactly\n  // how SN and EW quietly became uncomparable, and it was only caught by hand\n  // weeks later.  Record it on the row so the next one is caught on arrival.\n  const expected_m = src.expected_m || null;\n  const detour_ratio = (expected_m && lengthInMeters)\n    ? Math.round((lengthInMeters / expected_m) * 100) / 100\n    : null;\n  const route_ok = detour_ratio === null ? null : detour_ratio <= 1.25;\n  if (route_ok === false && !errorMsg) {\n    errorMsg = 'detour: route is ' + detour_ratio + 'x the direct drive ('\n             + lengthInMeters + ' m vs ' + expected_m + ' m expected)';\n  }\n\n  output.push({ json: {\n    move_id: src.move_id,\n    junction: src.junction,\n    movement: src.movement,\n    movement_kind: src.movement_kind,\n    from_arm: src.from_arm,\n    to_arm: src.to_arm,\n    orig: src.orig,\n    dest: src.dest,\n    via: src.via,\n    heading: src.heading,\n    observed_utc: now.toUTC().toISO({ suppressMilliseconds: true }),\n    observed_ist: now.setZone('Asia/Kolkata').toISO({ suppressMilliseconds: true }),\n    lengthInMeters, expected_m, detour_ratio, route_ok,\n    travelTimeInSeconds, historicTravelTimeInSeconds,\n    noTrafficTravelTimeInSeconds, trafficDelayInSeconds, departureTime,\n    error: errorMsg, http_status: httpStatus\n  }});\n}\nreturn output;"
+      },
+      "id": "b2e2b222-0000-4000-8000-000000000004",
+      "name": "Flatten Route Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "[final] Data",
+          "cachedResultName": "[final] Data"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "b2e2b222-0000-4000-8000-000000000005",
+      "name": "Append to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        800,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Column names must match your existing sheet exactly: move_id, junction, movement, orig, dest, observed_utc, observed_ist, lengthInMeters, travelTimeInSeconds, historicTravelTimeInSeconds, noTrafficTravelTimeInSeconds, trafficDelayInSeconds, departureTime, error, http_status"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "point",
+              "value": "={{ $json.orig }}"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "c3f3c333-0000-4000-8000-000000000006",
+      "name": "Get Flow Segment Data (TomTom)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        320,
+        220
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "queryAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "TomTom API Key (query auth)"
+        }
+      },
+      "notes": "Reuses the same queryAuth credential as Calculate Route - same key, same 2500/day quota, just one more call per point."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const source = $('Set Flow Points').all();\nconst output = [];\n\nfor (const item of $input.all()) {\n  const srcIdx = item.pairedItem && typeof item.pairedItem.item === 'number' ? item.pairedItem.item : 0;\n  const src = source[srcIdx] ? source[srcIdx].json : {};\n  const body = (item.json && item.json.flowSegmentData) || null;\n  const now = DateTime.now();\n\n  let currentSpeed = null, freeFlowSpeed = null, currentTravelTime = null,\n      freeFlowTravelTime = null, confidence = null, roadClosure = null,\n      frc = null, errorMsg = null;\n\n  if (body) {\n    currentSpeed = body.currentSpeed;\n    freeFlowSpeed = body.freeFlowSpeed;\n    currentTravelTime = body.currentTravelTime;\n    freeFlowTravelTime = body.freeFlowTravelTime;\n    confidence = body.confidence;\n    roadClosure = body.roadClosure;\n    frc = body.frc;\n  } else {\n    errorMsg = 'no flowSegmentData :: ' + JSON.stringify(item.json).slice(0, 250);\n  }\n\n  output.push({ json: {\n    move_id: src.move_id, junction: src.junction, movement: src.movement,\n    point: src.orig,\n    fetched_at_utc: now.toUTC().toISO({ suppressMilliseconds: true }),\n    fetched_at_ist: now.setZone('Asia/Kolkata').toISO({ suppressMilliseconds: true }),\n    frc, currentSpeed, freeFlowSpeed, currentTravelTime, freeFlowTravelTime,\n    confidence, roadClosure, error: errorMsg\n  }});\n}\nreturn output;"
+      },
+      "id": "c3f3c333-0000-4000-8000-000000000007",
+      "name": "Flatten Flow Segments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "[final] FlowSegments",
+          "cachedResultName": "[final] FlowSegments"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "c3f3c333-0000-4000-8000-000000000008",
+      "name": "Append to FlowSegments Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        800,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Create a FlowSegments tab with headers: move_id, junction, movement, point, fetched_at_utc, fetched_at_ist, frc, currentSpeed, freeFlowSpeed, currentTravelTime, freeFlowTravelTime, confidence, roadClosure, error"
+    },
+    {
+      "parameters": {
+        "jsCode": "const junctions = [\n  { junction: 'indiranagar_cmh', bbox: '77.6376022,12.9751431,77.6442938,12.9817403' },\n  { junction: 'ejipura',         bbox: '77.6300385,12.9353384,77.6367295,12.9419356' },\n  { junction: 'sonyworld',       bbox: '77.6231059,12.9333920,77.6297969,12.9399892' }\n];\nreturn junctions.map(j => ({ json: j }));"
+      },
+      "id": "a1e1a111-0000-4000-8000-000000000002",
+      "name": "Set Junctions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        440
+      ],
+      "jsCode": "const junctions = [\n  { junction: 'indiranagar_cmh', bbox: '77.6376022,12.9751431,77.6442938,12.9817403' }\n];\nreturn junctions.map(j => ({ json: j }));"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tomtom.com/traffic/services/5/incidentDetails",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "bbox",
+              "value": "={{ $json.bbox }}"
+            },
+            {
+              "name": "fields",
+              "value": "{incidents{type,geometry{type,coordinates},properties{id,iconCategory,magnitudeOfDelay,events{description,code,iconCategory},startTime,endTime,from,to,length,delay,roadNumbers,timeValidity}}}"
+            },
+            {
+              "name": "language",
+              "value": "en-GB"
+            },
+            {
+              "name": "timeValidityFilter",
+              "value": "present"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1e1a111-0000-4000-8000-000000000003",
+      "name": "Get Incidents (TomTom)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        320,
+        440
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "queryAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "TomTom API Key (query auth)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const categoryMap = {0:'Unknown',1:'Accident',2:'Fog',3:'DangerousConditions',4:'Rain',5:'Ice',6:'Jam',7:'LaneClosed',8:'RoadClosed',9:'RoadWorks',10:'Wind',11:'Flooding',14:'BrokenDownVehicle'};\nconst source = $('Set Junctions').all();\nconst output = [];\nconst fetchedAt = new Date().toISOString();\n\nfor (const item of $input.all()) {\n  const srcIdx = item.pairedItem && typeof item.pairedItem.item === 'number' ? item.pairedItem.item : 0;\n  const junction = source[srcIdx] ? source[srcIdx].json.junction : 'unknown';\n  const bbox = source[srcIdx] ? source[srcIdx].json.bbox : '';\n\n  const body = item.json || {};\n  if (!body.incidents) {\n    // request failed or errored - log it, don't silently drop\n    output.push({ json: {\n      junction, bbox, fetched_at: fetchedAt,\n      incident_id: null, category: 'FETCH_ERROR', description: JSON.stringify(body).slice(0,300),\n      magnitude: null, delay_seconds: null, from: null, to: null,\n      start_time: null, end_time: null, road_numbers: null, lat: null, lon: null\n    }});\n    continue;\n  }\n\n  if (body.incidents.length === 0) {\n    output.push({ json: {\n      junction, bbox, fetched_at: fetchedAt,\n      incident_id: null, category: 'none', description: 'No active incidents',\n      magnitude: null, delay_seconds: null, from: null, to: null,\n      start_time: null, end_time: null, road_numbers: null, lat: null, lon: null\n    }});\n    continue;\n  }\n\n  for (const inc of body.incidents) {\n    const p = inc.properties || {};\n    const firstEvent = (p.events && p.events[0]) || {};\n    let lat = null, lon = null;\n    const coords = inc.geometry && inc.geometry.coordinates;\n    if (coords) {\n      const pt = Array.isArray(coords[0]) ? coords[0] : coords;\n      lon = pt[0]; lat = pt[1];\n    }\n    output.push({ json: {\n      junction, bbox, fetched_at: fetchedAt,\n      incident_id: p.id || null,\n      category: categoryMap[p.iconCategory] !== undefined ? categoryMap[p.iconCategory] : p.iconCategory,\n      description: firstEvent.description || null,\n      magnitude: p.magnitudeOfDelay !== undefined ? p.magnitudeOfDelay : null,\n      delay_seconds: p.delay !== undefined ? p.delay : null,\n      from: p.from || null,\n      to: p.to || null,\n      start_time: p.startTime || null,\n      end_time: p.endTime || null,\n      road_numbers: (p.roadNumbers || []).join('; '),\n      lat, lon\n    }});\n  }\n}\nreturn output;"
+      },
+      "id": "a1e1a111-0000-4000-8000-000000000004",
+      "name": "Flatten Incidents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "[final] All Incidents",
+          "cachedResultName": "[final] All Incidents"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "a1e1a111-0000-4000-8000-000000000005",
+      "name": "Append to All Incidents",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        800,
+        440
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "d4a4d444-0000-4000-8000-000000000009",
+              "leftValue": "={{ ['Accident','LaneClosed','RoadClosed','RoadWorks','BrokenDownVehicle','Flooding'].includes($json.category) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4a4d444-0000-4000-8000-000000000010",
+      "name": "Filter (Real Obstructions)",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "[final] Obstructions",
+          "cachedResultName": "[final] Obstructions"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "d4a4d444-0000-4000-8000-000000000011",
+      "name": "Append to Obstructions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1040,
+        660
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Point at the same spreadsheet as Append to Sheet1 (All Incidents), just a different tab: Obstructions."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "/* Sample points for the flow-segment (free-flow speed) calls.\n *\n * This branch deliberately does NOT hang off 'Set Points'.  A flow segment is\n * a speed reading at ONE coordinate, so it needs one call per approach arm --\n * four per junction.  'Set Points' now also emits the eight turning movements\n * at indiranagar_cmh, and those reuse the same four origins, so feeding this\n * branch from there would fire the identical call three times over.\n *\n * Filtering 'Set Points' instead would be worse: 'Flatten Flow Segments' pairs\n * each response back to its source by item index, and a filter in between\n * renumbers the stream, so every reading would be labelled with the wrong\n * movement.  A separate source keeps the branch 1:1 and index-safe.\n *\n * The four origins and the movement names are exactly what this branch emitted\n * before, so the FlowSegments sheet keeps its existing shape.\n */\n\nconst ARM_ORIGIN = {\n  indiranagar_cmh: {\n    NS: '12.9802403,77.6410403',  // enters from N\n    SN: '12.9766431,77.6408557',  // enters from S\n    EW: '12.9783518,77.6427938',  // enters from E\n    WE: '12.9785316,77.6391022',  // enters from W\n  },\n  ejipura: {\n    NS: '12.9404356,77.6334763',\n    SN: '12.9368384,77.6332917',\n    EW: '12.9385471,77.6352295',\n    WE: '12.9387269,77.6315385',\n  },\n  sonyworld: {\n    NS: '12.9384892,77.6265437',\n    SN: '12.934892,77.6263591',\n    EW: '12.9366007,77.6282969',\n    WE: '12.9367805,77.6246059',\n  },\n};\n\nconst out = [];\nfor (const [junction, arms] of Object.entries(ARM_ORIGIN)) {\n  for (const [movement, orig] of Object.entries(arms)) {\n    out.push({ json: {\n      move_id: junction + '_' + movement,\n      junction,\n      movement,\n      orig,\n    }});\n  }\n}\nreturn out;"
+      },
+      "id": "d4a4d444-0000-4000-8000-000000000015",
+      "name": "Set Flow Points",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Points",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set Junctions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set Flow Points",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Points": {
+      "main": [
+        [
+          {
+            "node": "Calculate Route (TomTom)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Route (TomTom)": {
+      "main": [
+        [
+          {
+            "node": "Flatten Route Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten Route Response": {
+      "main": [
+        [
+          {
+            "node": "Append to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Flow Segment Data (TomTom)": {
+      "main": [
+        [
+          {
+            "node": "Flatten Flow Segments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten Flow Segments": {
+      "main": [
+        [
+          {
+            "node": "Append to FlowSegments Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Junctions": {
+      "main": [
+        [
+          {
+            "node": "Get Incidents (TomTom)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Incidents (TomTom)": {
+      "main": [
+        [
+          {
+            "node": "Flatten Incidents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten Incidents": {
+      "main": [
+        [
+          {
+            "node": "Append to All Incidents",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter (Real Obstructions)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter (Real Obstructions)": {
+      "main": [
+        [
+          {
+            "node": "Append to Obstructions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Flow Points": {
+      "main": [
+        [
+          {
+            "node": "Get Flow Segment Data (TomTom)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,73 @@
+# Abhyas junction interface.
+#
+#   docker compose up -d                 http://localhost:8000
+#   docker compose --profile tls up -d   public, HTTPS via Caddy
+#
+# ONE INSTANCE ONLY. server.py holds a single module level SimWorker thread
+# that owns the only TraCI connection, and every browser on /ws watches that
+# one shared simulation. A second replica runs a second unrelated world and a
+# user's dial change lands on whichever one the load balancer picked. Don't add
+# deploy.replicas, and pin it to one backend if it ever sits behind an LB.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: abhyas:latest
+    restart: unless-stopped
+
+    # loopback, so the container isn't exposed directly when the tls profile is
+    # in use. "8000:8000" to reach it over plain http from another machine, but
+    # read the mic note further down first.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    environment:
+      # both optional, both degrade to a clear "off" when unset
+      ABHYAS_DEEPGRAM_API_KEY: "${ABHYAS_DEEPGRAM_API_KEY:-}"
+      ABHYAS_LLM_API_KEY: "${ABHYAS_LLM_API_KEY:-}"
+      ABHYAS_LLM_MODEL: "${ABHYAS_LLM_MODEL:-openai/gpt-oss-120b}"
+      # two_phase or four_phase, see config.DEFAULT_PHASE_PLAN
+      ABHYAS_PHASE_PLAN: "${ABHYAS_PHASE_PLAN:-four_phase}"
+
+    volumes:
+      # versions, validation.json, counterfactual cards. Without this a restart
+      # loses the version tree and the live session drops back to the
+      # uncalibrated default demand.
+      - abhyas-results:/app/interactive-ui/results
+
+    # the fleet forks a pool of SUMO runs and the live session wants a core to
+    # itself. below ~2 cores the live view stutters while a fleet run is going.
+    cpus: "4.0"
+    mem_limit: 4g
+
+    security_opt:
+      - no-new-privileges:true
+
+  # HTTPS terminator, only with --profile tls.
+  # Not decoration if you want voice: getUserMedia is gated behind a secure
+  # context, so the mic works on http://localhost and is silently dead over
+  # plain http to any other host.
+  caddy:
+    profiles: ["tls"]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # the real hostname, Caddy gets a cert for it. Left defaulted rather than
+      # required because compose interpolates every service whether or not its
+      # profile is active.
+      ABHYAS_DOMAIN: "${ABHYAS_DOMAIN:-localhost}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  abhyas-results:
+  caddy-data:
+  caddy-config:
