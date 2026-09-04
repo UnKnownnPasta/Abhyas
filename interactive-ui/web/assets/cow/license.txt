@@ -1,0 +1,11 @@
+Model Information:
+* title:	Корова
+* source:	https://sketchfab.com/3d-models/bbea9a5ef3894cc3a26ce177ae3e15bb
+* author:	Тимох (https://sketchfab.com/Jguyfioy)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Корова" (https://sketchfab.com/3d-models/bbea9a5ef3894cc3a26ce177ae3e15bb) by Тимох (https://sketchfab.com/Jguyfioy) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

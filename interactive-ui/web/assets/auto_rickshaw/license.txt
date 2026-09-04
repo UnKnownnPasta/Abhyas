@@ -1,0 +1,11 @@
+Model Information:
+* title:	Autorickshaw 3d model free
+* source:	https://sketchfab.com/3d-models/autorickshaw-3d-model-free-b6434fe6dd1647af83120763767844a8
+* author:	iGauravRajput (https://sketchfab.com/iGauravRajput)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Autorickshaw 3d model free" (https://sketchfab.com/3d-models/autorickshaw-3d-model-free-b6434fe6dd1647af83120763767844a8) by iGauravRajput (https://sketchfab.com/iGauravRajput) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
