@@ -1,0 +1,11 @@
+[final] Data
+move_id	junction	movement	movement_kind	from_arm	to_arm	orig	dest	via	heading	observed_utc	observed_ist	lengthInMeters	expected_m	detour_ratio	route_ok	travelTimeInSeconds	historicTravelTimeInSeconds	noTrafficTravelTimeInSeconds	trafficDelayInSeconds	departureTime	error	http_status
+
+[final] FlowSegments
+move_id	junction	movement	point	fetched_at_utc	fetched_at_ist	frc	currentSpeed	freeFlowSpeed	currentTravelTime	freeFlowTravelTime	confidence	roadClosure	error
+
+[final] All Incidents
+junction	bbox	fetched_at	incident_id	category	description	magnitude	delay_seconds	from	to	start_time	end_time	road_numbers	lat	lon
+
+[final] Obstructions
+junction	bbox	fetched_at	incident_id	category	description	magnitude	delay_seconds	from	to	start_time	end_time	road_numbers	lat	lon
