@@ -1,0 +1,31 @@
+# Pinned. Keep the four SUMO packages on the same version - eclipse-sumo ships
+# the binaries, sumolib/traci the python bindings, and a skew between them is
+# how you get a simulation that ignores your config and looks completely fine.
+# (config.py forces the pip copy to win for the same reason.)
+
+eclipse-sumo==1.27.1
+sumo-data==1.27.1
+sumolib==1.27.1
+traci==1.27.1
+
+# sumolib needs this to turn the archive's lat/lon endpoints into network
+# coordinates. Without it every corridor measurement raises.
+pyproj==3.7.2
+
+# reads the TomTom sheets
+openpyxl==3.1.5
+
+# web interface
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.4
+
+# upstream websocket client for the /ws/voice -> Deepgram proxy.
+# Deliberately a range, not a pin. google-genai and the realtime packages cap
+# websockets a long way below the newest release, and pinning 17.1 here left
+# pip with nothing to resolve to. server.py asks the installed copy whether it
+# wants extra_headers or additional_headers, so anything in this range works.
+websockets>=12,<18
+
+# Render Workflows SDK
+render>=1.0.1

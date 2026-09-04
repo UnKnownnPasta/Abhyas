@@ -1,0 +1,49 @@
+# Render Blueprint for Abhyas
+# Hosts the 3D Digital Twin, Interactive CLI Dash, and workflow execution
+# on Render's free tier (no persistent disk, no background worker - both
+# require a paid plan and a card on file).
+#
+# Deploy via: Render Dashboard -> Blueprints -> New Blueprint Instance
+# or connect this repository to Render.
+#
+# Free tier limits worth knowing before you rely on this for a demo:
+#   - Spins down after ~15 min of no inbound requests, cold-starts on the
+#     next request (can take 30-60s to come back up).
+#   - No persistent disk: anything under interactive-ui/results/ (version
+#     trees, validation.json, run history) is wiped on every restart/deploy.
+#   - Shared CPU, 512 MB RAM - fine for the live 3D twin and light CLI use,
+#     but a 30-seed validation fleet will be slow and may hit the memory
+#     ceiling. Run heavy batch jobs (fleet/calibration sweeps) elsewhere
+#     (e.g. locally or via a throwaway CI job) and commit the resulting
+#     results/*.json if you need them to survive a redeploy.
+
+version: "1"
+
+services:
+  # Single free-tier web service: FastAPI backend, 3D Digital Twin,
+  # WebSocket telemetry, CLI Dash, and workflow execution all in one
+  # process. RENDER_WORKFLOW_ENABLED/RENDER_API_KEY are left unset so
+  # abhyas.workflows falls back to local in-process threads instead of
+  # dispatching to Render Cloud Workflows (which needs a separate paid
+  # worker service).
+  - type: web
+    name: abhyas-web
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    numInstances: 1  # Note: 1 replica recommended as SimWorker manages the live TraCI session
+    healthCheckPath: /api/voice/status
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: ABHYAS_PHASE_PLAN
+        value: four_phase
+      - key: RENDER_WORKFLOW_ENABLED
+        value: "false"
+      - key: ABHYAS_DEEPGRAM_API_KEY
+        sync: false
+      - key: ABHYAS_LLM_API_KEY
+        sync: false
+      - key: ABHYAS_LLM_MODEL
+        value: openai/gpt-oss-120b

@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Abhyas — CMH Road × 100 Feet Road | Simulation & CLI Dash</title>
+<link rel="stylesheet" href="/web/style.css"/>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="/web/scene3d.js"></script>
+</head>
+<body>
+
+<!-- ========================================================= top navigation -->
+<header class="top-nav">
+  <div class="nav-brand">
+    <span class="brand-badge">ABHYAS</span>
+    <span class="junction-title" id="junction-name">CMH Road × 100 Feet Road</span>
+  </div>
+
+  <div class="nav-views">
+    <button class="view-tab active" id="tab-sim-view" data-view="sim">
+      <span class="view-icon">🚦</span> Digital Twin (3D)
+    </button>
+    <button class="view-tab" id="tab-dash-view" data-view="dash">
+      <span class="view-icon">💻</span> CLI & Workflows Dash
+      <span class="tab-indicator" id="dash-busy-indicator" hidden>●</span>
+    </button>
+  </div>
+
+  <div class="nav-status">
+    <div class="status-badge" id="badge-wf-engine" title="Render Workflows Execution Mode">
+      <span class="status-dot green" id="wf-engine-dot"></span>
+      <span id="wf-engine-text">Render Workflows: Local</span>
+    </div>
+    <div class="status-badge" id="badge-sim-status" title="SUMO Simulation Status">
+      <span class="status-dot green" id="sim-dot"></span>
+      <span id="sim-status-text">Sim Running</span>
+    </div>
+  </div>
+</header>
+
+<!-- =================================================== VIEW 1: 3D SIMULATION -->
+<div id="view-sim" class="view-panel active">
+  <main>
+    <!-- stage ------------------------------------------------------------- -->
+    <section class="stage">
+      <div class="simbar">
+        <div class="simbar-group">
+          <button class="tool" data-cmd="resume" title="Run">▶</button>
+          <button class="tool" data-cmd="pause" title="Pause">❙❙</button>
+          <button class="tool" data-cmd="reset" title="Restart from baseline">↺</button>
+        </div>
+        <div class="simbar-group">
+          <label class="field"><span>Time</span><output id="sim-clock">0:00</output></label>
+        </div>
+        <div class="simbar-group">
+          <label class="field"><span>Speed</span>
+            <input type="range" id="speed" min="1" max="20" step="1" value="4"/>
+            <output id="speed-label">4×</output>
+          </label>
+        </div>
+        <div class="simbar-group">
+          <label class="field"><span>Zoom</span>
+            <input type="range" id="zoom" min="0" max="100" step="1" value="50"/>
+            <output id="zoom-label">—</output>
+          </label>
+          <button class="tool" id="fit-junction" title="Frame the junction">Junction</button>
+          <button class="tool" id="fit-network" title="Frame the whole network">Network</button>
+        </div>
+        <div class="simbar-group right">
+          <select id="scheme" title="Colour scheme">
+            <option value="real">real world</option>
+            <option value="dark" selected>dark</option>
+          </select>
+          <label class="check"><input type="checkbox" id="show-ids"/> ids</label>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="map"></canvas>
+
+        <div class="overlay overlay-tl">
+          <div class="sig-block">
+            <div class="sig-title">Signal</div>
+            <div class="sig-phase" id="phase-name">—</div>
+            <div class="sig-count"><span id="phase-countdown">—</span><span class="unit">s to switch</span></div>
+            <div class="sig-plan" id="plan-line">—</div>
+          </div>
+        </div>
+
+        <div class="overlay overlay-tr">
+          <div class="arm-grid" id="arm-grid"></div>
+        </div>
+
+        <div class="overlay overlay-bl">
+          <div class="scalebar"><span class="bar" id="scale-bar"></span><span id="scale-label">—</span></div>
+        </div>
+
+        <div class="overlay overlay-br legend" id="legend"></div>
+        <div class="toast-stack" id="toasts"></div>
+        <div class="credit">Car model: "BMW M3 | Low-Poly Stylized" by kulonee, CC BY-SA 4.0</div>
+      </div>
+    </section>
+
+    <!-- rail -------------------------------------------------------------- -->
+    <aside class="rail">
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="controls">Controls</button>
+        <button class="tab" data-tab="versions">Versions</button>
+        <button class="tab" data-tab="results">Results</button>
+      </nav>
+
+      <!-- controls ------------------------------------------------------- -->
+      <div class="tabpane" data-pane="controls">
+        <div class="card">
+          <div class="card-head">
+            <h2>What-if controls</h2>
+            <span class="tag" id="cycle-tag">—</span>
+          </div>
+          <p class="fineprint">Every knob the model actually has. Ranges come
+            from the simulation, so a value it would refuse cannot be dialled in.</p>
+          <div id="control-deck"></div>
+          <div class="row-actions">
+            <button id="reset-controls" class="ghost">Back to baseline</button>
+            <button id="commit-controls" class="primary">Save as version</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- versions ------------------------------------------------------- -->
+      <div class="tabpane" data-pane="versions" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2>Versions</h2>
+            <span class="tag" id="version-count">0</span>
+          </div>
+          <form id="commit-form" class="commit">
+            <input id="commit-message" type="text" autocomplete="off"
+                   placeholder="name this state — “longer NS green, cow on E”"/>
+            <button type="submit" class="primary">Commit</button>
+          </form>
+          <p class="fineprint">A tree, not a list: branching off one starting
+            point to try two what-ifs is the normal shape of this. Restoring
+            overwrites the live state — there is no merge.</p>
+          <div id="version-tree" class="vtree"></div>
+          <div id="version-diff" class="vdiff" hidden></div>
+        </div>
+      </div>
+
+      <!-- results -------------------------------------------------------- -->
+      <div class="tabpane" data-pane="results" hidden>
+        <div class="card" id="job-card" hidden>
+          <div class="card-head"><h2 id="job-title">Working</h2></div>
+          <div class="bar"><div class="bar-fill" id="job-bar"></div></div>
+          <p class="job-line" id="job-line">—</p>
+          <div class="job-log" id="job-log"></div>
+        </div>
+
+        <div class="card" id="cf-card" hidden>
+          <div class="card-head">
+            <h2>Counterfactual</h2>
+            <span class="tag" id="cf-verdict-tag">—</span>
+          </div>
+          <p class="headline" id="cf-headline">—</p>
+          <div id="cf-table"></div>
+          <div id="cf-notes" class="notes"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Validation</h2>
+            <span class="tag" id="val-overall">not run</span>
+          </div>
+          <p class="headline" id="val-statement">
+            The model has not been validated in this session. Run the fleet to
+            compare it against the travel-time archive.</p>
+          <div id="val-table"></div>
+          <div id="val-agents" class="agents"></div>
+          <div class="row-actions">
+            <button id="run-fleet" class="primary">Dispatch validation fleet</button>
+            <select id="fleet-seeds" title="Seeds per movement">
+              <option value="8">8 seeds (quick)</option>
+              <option value="16">16 seeds</option>
+              <option value="30" selected>30 seeds (reportable)</option>
+            </select>
+          </div>
+          <p class="fineprint" id="val-limitation"></p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>The archive</h2></div>
+          <div id="archive-summary" class="kv"></div>
+          <canvas id="profile" height="120"></canvas>
+          <p class="fineprint" id="archive-note"></p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- voice ------------------------------------------------------------- -->
+  <section class="voicebar" id="voicebar">
+    <button id="mic" class="micbtn" aria-label="Speak an instruction">
+      <canvas id="blob" width="120" height="120"></canvas>
+    </button>
+
+    <div class="voicebody">
+      <div class="voicehead">
+        <span class="micstate" id="mic-state">Tap to speak</span>
+        <span class="tag" id="voice-backend" title="Where the sentence is parsed">local rules</span>
+        <span class="fineprint" id="voice-note"></span>
+      </div>
+
+      <form id="ask-form" class="ask">
+        <input id="ask" type="text" autocomplete="off" spellcheck="false"
+               placeholder="or type — “add 10 seconds to the northbound green”"/>
+        <button type="submit" class="ghost">Parse</button>
+      </form>
+
+      <div class="examples" id="examples"></div>
+
+      <div class="proposal" id="proposal" hidden>
+        <div class="proposal-head">
+          <span class="heard">“<span id="heard-text"></span>”</span>
+          <span class="tag" id="proposal-source">local rules</span>
+        </div>
+        <p class="headline" id="proposal-summary">—</p>
+        <div id="proposal-edits" class="edits"></div>
+        <div id="proposal-notes" class="notes"></div>
+        <div class="row-actions">
+          <button id="apply-proposal" class="primary">Apply to the dials</button>
+          <button id="discard-proposal" class="ghost">Discard</button>
+        </div>
+        <p class="fineprint">Nothing reaches the simulation until you accept it.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ================================================= VIEW 2: CLI & WORKFLOWS DASH -->
+<div id="view-dash" class="view-panel" hidden>
+  <div class="dash-container">
+
+    <!-- summary metrics banner -->
+    <div class="dash-metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">Active Time Slot</div>
+        <div class="metric-value" id="dash-active-slot">—</div>
+        <div class="metric-sub">Calibrated validation window</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Demand Level</div>
+        <div class="metric-value" id="dash-demand-vph">— <span class="unit">veh/h</span></div>
+        <div class="metric-sub">Fitted across arterial arms</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Signal Shape</div>
+        <div class="metric-value" id="dash-signal-plan">—</div>
+        <div class="metric-sub">Active junction controller</div>
+      </div>
+      <div class="metric-card highlight">
+        <div class="metric-label">Render Workflows</div>
+        <div class="metric-value" id="dash-wf-mode">Local Worker</div>
+        <div class="metric-sub" id="dash-wf-tasks-count">5 tasks registered</div>
+      </div>
+    </div>
+
+    <!-- main 2-column dashboard layout -->
+    <div class="dash-main-split">
+
+      <!-- LEFT: Interactive Terminal Console -->
+      <section class="dash-section terminal-section">
+        <div class="section-head">
+          <div class="head-left">
+            <span class="terminal-icon">❯_</span>
+            <h2>Abhyas Interactive CLI Console</h2>
+            <span class="badge" id="terminal-busy-badge">Ready</span>
+          </div>
+          <div class="head-actions">
+            <button class="btn-subtle" id="btn-term-clear" title="Clear console output">Clear</button>
+            <button class="btn-subtle" id="btn-term-copy" title="Copy output">Copy</button>
+            <label class="check-inline">
+              <input type="checkbox" id="term-autoscroll" checked/> Auto-scroll
+            </label>
+          </div>
+        </div>
+
+        <!-- CLI Menu Shortcuts Bar -->
+        <div class="cli-quick-bar">
+          <span class="quick-title">CLI Shortcuts:</span>
+          <button class="cli-pill" data-cmd="1">1) Data Summary</button>
+          <button class="cli-pill" data-cmd="2">2) Slot</button>
+          <button class="cli-pill" data-cmd="3">3) List Agents</button>
+          <button class="cli-pill" data-cmd="4 calibration">4) Calibration</button>
+          <button class="cli-pill" data-cmd="5">5) Fleet Run</button>
+          <button class="cli-pill" data-cmd="6 10 north_south">6) What-If</button>
+          <button class="cli-pill" data-cmd="7 add 10 seconds to north">7) NLU Ask</button>
+          <button class="cli-pill" data-cmd="8">8) Netbuild</button>
+          <button class="cli-pill" data-cmd="9">9) Self-Test</button>
+          <button class="cli-pill" data-cmd="help">help</button>
+        </div>
+
+        <!-- Terminal Output Window -->
+        <div class="terminal-window" id="terminal-window">
+          <div class="terminal-lines" id="terminal-lines">
+            <div class="term-line info">Connecting to Abhyas CLI runner...</div>
+          </div>
+        </div>
+
+        <!-- Terminal Prompt Input -->
+        <form class="terminal-input-row" id="terminal-form">
+          <span class="term-prompt">you&gt;</span>
+          <input type="text" id="terminal-input" autocomplete="off" spellcheck="false"
+                 placeholder="Type a CLI command (e.g. 1, 3, 5, 4 calibration, or 7 add 10s north)..."/>
+          <button type="submit" class="primary" id="btn-term-send">Execute</button>
+        </form>
+      </section>
+
+      <!-- RIGHT: Render Workflows Hub & Task Orchestration -->
+      <section class="dash-section workflows-section">
+        <div class="section-head">
+          <div class="head-left">
+            <span class="terminal-icon">⚡</span>
+            <h2>Render Workflows Task Runner</h2>
+          </div>
+          <span class="tag" id="wf-runs-summary">0 runs</span>
+        </div>
+
+        <div class="wf-info-banner">
+          <div class="wf-info-text">
+            <strong>Durable Background Task Orchestration:</strong> Tasks run asynchronously with live streaming telemetry, multi-seed workers, and persistent validation persistence.
+          </div>
+        </div>
+
+        <!-- Quick Workflow Trigger Grid -->
+        <div class="wf-triggers-grid">
+          <button class="wf-trigger-card" id="btn-wf-fleet">
+            <div class="wf-icon">🚀</div>
+            <div class="wf-meta">
+              <div class="wf-name">Validation Fleet</div>
+              <div class="wf-desc">Run all 7 agents across seeds</div>
+            </div>
+          </button>
+
+          <button class="wf-trigger-card" id="btn-wf-calibration">
+            <div class="wf-icon">🎯</div>
+            <div class="wf-meta">
+              <div class="wf-name">Calibrate Slot</div>
+              <div class="wf-desc">Sweep veh/h to fit TomTom times</div>
+            </div>
+          </button>
+
+          <button class="wf-trigger-card" id="btn-wf-counterfactual">
+            <div class="wf-icon">🔀</div>
+            <div class="wf-meta">
+              <div class="wf-name">What-If Sweep</div>
+              <div class="wf-desc">Paired seeds + split robustness</div>
+            </div>
+          </button>
+
+          <button class="wf-trigger-card" id="btn-wf-selftest">
+            <div class="wf-icon">🧪</div>
+            <div class="wf-meta">
+              <div class="wf-name">Pipeline Selftest</div>
+              <div class="wf-desc">11 full-system verification checks</div>
+            </div>
+          </button>
+
+          <button class="wf-trigger-card" id="btn-wf-netbuild">
+            <div class="wf-icon">🛠️</div>
+            <div class="wf-meta">
+              <div class="wf-name">OSM Network Build</div>
+              <div class="wf-desc">Rebuild SUMO net from source OSM</div>
+            </div>
+          </button>
+        </div>
+
+        <!-- Active & Recent Workflow Runs Table -->
+        <div class="wf-runs-panel">
+          <div class="wf-runs-header">
+            <h3>Recent Workflow Runs</h3>
+            <button class="btn-subtle" id="btn-refresh-runs">Refresh</button>
+          </div>
+          <div class="wf-runs-table-wrap">
+            <table class="wf-table">
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Status</th>
+                  <th>Duration</th>
+                  <th>Run ID</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="wf-runs-tbody">
+                <tr><td colspan="5" class="empty-state">No workflow runs logged yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+    </div>
+
+    <!-- LOWER DECK: Agent Fleet Matrix & Counterfactual Studio -->
+    <div class="dash-lower-grid">
+
+      <!-- Validation Fleet Matrix -->
+      <section class="dash-card">
+        <div class="card-head">
+          <h2>Validation Agent Fleet</h2>
+          <span class="tag" id="dash-agent-count">7 agents</span>
+        </div>
+        <p class="fineprint">Every agent has one job and is allowed to fail the model. Later agents consume calibrated demand from earlier ones.</p>
+        <div class="agents-deck" id="dash-agents-deck">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+
+      <!-- Counterfactual Studio -->
+      <section class="dash-card">
+        <div class="card-head">
+          <h2>Counterfactual Studio</h2>
+          <span class="tag">Paired Seeds</span>
+        </div>
+        <p class="fineprint">Run before/after signal changes against identical random seeds with turning split sensitivity sweeps.</p>
+
+        <div class="cf-inputs">
+          <label class="cf-field">
+            <span>Phase Group</span>
+            <select id="cf-group-select">
+              <option value="north_south" selected>North-South (100 Feet Rd)</option>
+              <option value="east_west">East-West (CMH Rd)</option>
+            </select>
+          </label>
+
+          <label class="cf-field">
+            <span>Green Delta (seconds)</span>
+            <div class="slider-row">
+              <input type="range" id="cf-delta-slider" min="-20" max="20" step="2" value="10"/>
+              <output id="cf-delta-val">+10s</output>
+            </div>
+          </label>
+
+          <label class="cf-field">
+            <span>Seeds</span>
+            <select id="cf-seeds-select">
+              <option value="8">8 seeds (quick)</option>
+              <option value="16">16 seeds</option>
+              <option value="30" selected>30 seeds (reportable)</option>
+            </select>
+          </label>
+
+          <label class="check-inline">
+            <input type="checkbox" id="cf-splits-sweep" checked/> Sweep turning splits (50/30/20 to 70/20/10)
+          </label>
+
+          <button class="primary full-width" id="btn-trigger-cf">Dispatch Counterfactual Analysis</button>
+        </div>
+
+        <div id="dash-cf-result" class="cf-result-box" hidden>
+          <div class="verdict-banner" id="dash-cf-verdict-banner">—</div>
+          <div class="notes" id="dash-cf-notes"></div>
+        </div>
+      </section>
+
+    </div>
+
+  </div>
+</div>
+
+<!-- Modal for Workflow Run Details -->
+<div class="modal-backdrop" id="run-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="modal-run-title">Workflow Run Details</h3>
+      <button class="btn-close" id="btn-close-modal">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta-grid" id="modal-meta-grid"></div>
+      <h4>Execution Logs</h4>
+      <div class="modal-logs" id="modal-logs"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/web/app.js"></script>
+</body>
+</html>
