@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2026-08-24T17:04:23.277255+05:30 by Eclipse SUMO netconvert 1.27.1
+<netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
+
+    <input>
+        <type-files value="C:\Program Files (x86)\Eclipse\Sumo\\data\typemap\osmNetconvert.typ.xml"/>
+        <osm-files value="indiranagar_bbox.osm.xml"/>
+    </input>
+
+    <output>
+        <output-file value="indiranagar.net.xml"/>
+        <junctions.join-output value="joined.txt"/>
+        <ptline-clean-up value="true"/>
+    </output>
+
+    <projection>
+        <proj.utm value="true"/>
+    </projection>
+
+    <processing>
+        <geometry.remove value="true"/>
+        <lefthand value="true"/>
+    </processing>
+
+    <tls_building>
+        <tls.discard-simple value="true"/>
+        <tls.join value="true"/>
+        <tls.guess-signals value="true"/>
+        <tls.default-type value="static"/>
+    </tls_building>
+
+    <edge_removal>
+        <keep-edges.by-vclass value="passenger"/>
+        <remove-edges.isolated value="true"/>
+    </edge_removal>
+
+    <junctions>
+        <no-turnarounds value="true"/>
+        <junctions.join value="true"/>
+        <junctions.join-dist value="25"/>
+    </junctions>
+
+</netconvertConfiguration>
+-->
+
+<nodes version="1.20" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/nodes_file.xsd">
+    <join nodes="1462139757 736207339"/>
+    <join nodes="3369884090 421264387"/>
+    <join nodes="11497593366 3369884089 421264386 421265112"/>
+    <join nodes="1404460902 6137438174"/>
+    <join nodes="12822535157 1404460909"/>
+    <join nodes="13849804075 421265110"/>
+    <join nodes="1563314098 4101591489"/>
+    <join nodes="421264375 423744890"/>
+    <join nodes="736207606 736207614"/>
+</nodes>
