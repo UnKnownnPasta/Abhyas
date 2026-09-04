@@ -23,8 +23,8 @@ const state = {
   micLevel: 0,
   busy: false,
   compareFrom: null,
-  armView: 'N',
-  obstructionArm: 'N',
+  dir: 'N',              // shared focus arm: map overlay + both Controls sections
+  obstructionKind: 'cow',
 };
 
 /* ================================================================== boot */
@@ -55,6 +55,7 @@ async function boot() {
   setChrome('junction-name', state.context.junction.name);
   buildLegend();
   buildArmRows();
+  setInterval(paintCompassHeadings, 150);
   buildExamples();
   renderArchive();
   renderPlan(state.context.baseline_plan);
@@ -201,8 +202,14 @@ function buildLegend() {
 
 const COMPASS_DIRS = ['N', 'E', 'S', 'W'];
 
+// A real compass: the N/E/S/W buttons stay fixed (so "click N" is always in
+// the same spot) and a needle rotates inside to show which way the 3d
+// camera is actually looking - paintCompassHeadings() drives it from
+// Scene3D's OrbitControls azimuth, polled on an interval since three.js has
+// no change event for camera orbiting.
 function compassHtml() {
   return '<div class="compass">' +
+    '<div class="compass-dial"><div class="compass-needle"></div></div>' +
     COMPASS_DIRS.map((d) => '<button class="compass-btn dir-' + d +
       '" data-dir="' + d + '">' + d + '</button>').join('') +
     '</div>';
@@ -215,19 +222,30 @@ function wireCompass(root, selected, onSelect) {
   });
 }
 
+function paintCompassHeadings() {
+  const heading = window.Scene3D?.getHeadingDeg?.();
+  if (heading == null) return;
+  document.querySelectorAll('.compass-needle').forEach((n) => {
+    n.style.transform = 'rotate(' + heading + 'deg)';
+  });
+}
+
+function setDir(dir) {
+  state.dir = dir;
+  buildArmRows();                        // rebuilds + rewires the map compass
+  if (state.frame) renderFrame(state.frame);
+  if (state.surface) renderSurface(state.surface); // rebuilds + rewires the Controls one
+}
+
 function buildArmRows() {
   const el = $('arm-grid');
   el.innerHTML = compassHtml() +
     '<div class="arm-row arm-row-active">' +
       '<span class="lamp" id="arm-active-lamp"></span>' +
-      '<span class="name" id="arm-active-name">' + state.armView + ' approach</span>' +
+      '<span class="name" id="arm-active-name">' + state.dir + ' approach</span>' +
       '<span class="q" id="arm-active-q">—</span>' +
     '</div>';
-  wireCompass(el, state.armView, (dir) => {
-    state.armView = dir;
-    buildArmRows();
-    if (state.frame) renderFrame(state.frame);
-  });
+  wireCompass(el, state.dir, setDir);
 }
 
 function renderFrame(frame) {
@@ -236,7 +254,7 @@ function renderFrame(frame) {
   $('phase-name').textContent = frame.signal.phase_name || '—';
   $('phase-countdown').textContent = Math.max(0, Math.round(frame.signal.time_to_switch));
 
-  const name = state.armView;
+  const name = state.dir;
   const colour = frame.signal.arms?.[name];
   const lamp = $('arm-active-lamp');
   if (lamp) lamp.className = 'lamp' + (colour ? ' ' + colour : '');
@@ -320,10 +338,20 @@ async function loadSurface() {
   }
 }
 
+function renderDirPicker() {
+  const el = $('dir-picker');
+  if (!el) return;
+  el.innerHTML = '<p class="fineprint">Focus approach - drives the share dial '
+    + 'and obstructions below, and the map overlay.</p>' + compassHtml();
+  wireCompass(el, state.dir, setDir);
+  paintCompassHeadings();
+}
+
 function renderSurface(surface) {
   state.surface = surface;
   state.baseline = surface.baseline;
   $('cycle-tag').textContent = 'cycle ' + surface.cycle_seconds + ' s';
+  renderDirPicker();
 
   const deck = $('control-deck');
   const open = new Set([...deck.querySelectorAll('details[open]')]
@@ -335,7 +363,7 @@ function renderSurface(surface) {
     if (!controls.length) continue;
     const box = document.createElement('details');
     box.dataset.group = group;
-    box.open = open.size ? open.has(group) : group !== 'Obstructions';
+    box.open = open.size ? open.has(group) : true;
     const badge = (group === 'Signal' && surface.shape_label)
       ? ' &middot; ' + escapeHtml(surface.shape_label) : '';
     box.innerHTML = '<summary><span>' + group + badge + '</span>' +
@@ -345,15 +373,9 @@ function renderSurface(surface) {
     body.className = 'group-body';
 
     if (group === 'Obstructions') {
-      const compass = document.createElement('div');
-      compass.innerHTML = compassHtml();
-      body.appendChild(compass);
-      wireCompass(compass, state.obstructionArm, (dir) => {
-        state.obstructionArm = dir;
-        renderSurface(state.surface);
-      });
-      const shown = controls.filter((c) => c.id.endsWith('.' + state.obstructionArm));
-      for (const control of shown) body.appendChild(buildControl(control));
+      buildObstructionPicker(body, controls);
+    } else if (group === 'Traffic') {
+      buildTrafficSection(body, controls);
     } else {
       for (const control of controls) body.appendChild(buildControl(control));
     }
@@ -361,6 +383,74 @@ function renderSurface(surface) {
     box.appendChild(body);
     deck.appendChild(box);
   }
+}
+
+function buildTrafficSection(body, controls) {
+  const shareId = 'demand.arm_share.' + state.dir;
+  const share = controls.find((c) => c.id === shareId);
+  const rest = controls.filter((c) => !c.id.startsWith('demand.arm_share.'));
+
+  if (share) {
+    const heading = document.createElement('p');
+    heading.className = 'fineprint';
+    heading.innerHTML = '<strong>' + state.dir + ' approach</strong> - the other '
+      + 'three renormalise around this one.';
+    body.appendChild(heading);
+    body.appendChild(buildControl(share));
+  }
+  for (const control of rest) body.appendChild(buildControl(control));
+}
+
+function buildObstructionPicker(body, controls) {
+  // one kind's dial per direction lives in `controls`; the type dropdown
+  // just swaps which of those the stepper below is pointed at, instead of
+  // showing all 3 kinds x 4 arms (12 sliders) stacked at once.
+  const kinds = [];
+  const seen = new Set();
+  for (const c of controls) {
+    const kind = c.id.split('.')[1];
+    if (seen.has(kind)) continue;
+    seen.add(kind);
+    kinds.push({ kind, label: c.label.replace(/ on [NSEW]$/, '') });
+  }
+  if (!kinds.some((k) => k.kind === state.obstructionKind)) {
+    state.obstructionKind = kinds[0]?.kind;
+  }
+
+  const picker = document.createElement('div');
+  picker.className = 'obstruction-picker';
+  picker.innerHTML = '<select class="obstruction-kind">' +
+    kinds.map((k) => '<option value="' + escapeHtml(k.kind) + '"' +
+      (k.kind === state.obstructionKind ? ' selected' : '') + '>' +
+      escapeHtml(k.label) + '</option>').join('') +
+    '</select>';
+  picker.querySelector('select').onchange = (event) => {
+    state.obstructionKind = event.target.value;
+    renderSurface(state.surface);
+  };
+  body.appendChild(picker);
+
+  const control = controls.find((c) => c.id === 'obstruction.' + state.obstructionKind + '.' + state.dir);
+  if (!control) return;
+
+  const stepper = document.createElement('div');
+  stepper.className = 'stepper';
+  const count = Math.round(control.value);
+  stepper.innerHTML =
+    '<button class="stepper-btn minus"' + (count <= control.min ? ' disabled' : '') + '>&minus;</button>' +
+    '<span class="stepper-count">' + count + '</span>' +
+    '<button class="stepper-btn plus"' + (count >= control.max ? ' disabled' : '') + '>+</button>' +
+    '<span class="stepper-label">on ' + state.dir + ' (max ' + control.max + ')</span>';
+  stepper.querySelector('.minus').onclick = () =>
+    applyEdits([{ id: control.id, value: Math.max(control.min, count - 1) }]);
+  stepper.querySelector('.plus').onclick = () =>
+    applyEdits([{ id: control.id, value: Math.min(control.max, count + 1) }]);
+  body.appendChild(stepper);
+
+  const help = document.createElement('p');
+  help.className = 'fineprint';
+  help.textContent = control.help;
+  body.appendChild(help);
 }
 
 function buildControl(control) {

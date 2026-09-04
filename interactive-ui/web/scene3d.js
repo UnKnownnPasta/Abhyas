@@ -270,10 +270,17 @@ function loadVehicleModels() {
         const holder = new THREE.Group();
         gltf.scene.rotation.y = entry.yaw * Math.PI / 180;
         holder.add(gltf.scene);
+        holder.updateMatrixWorld(true);
 
         const size = new THREE.Vector3();
-        new THREE.Box3().setFromObject(holder).getSize(size);
-        const dims = [Math.max(size.x, 0.001), Math.max(size.y, 0.001), Math.max(size.z, 0.001)];
+        new THREE.Box3().setFromObject(holder, true).getSize(size);
+        // A degenerate axis (a rigged model's bind pose measured before its
+        // skeleton is fully attached, or any other bad gltf) turns into a
+        // divide-by-near-zero in the uniform scale factor below and the
+        // model fills the screen - the cow did exactly this. A floor of a
+        // few cm is generous for any real vehicle/obstruction dimension.
+        const MIN_DIM = 0.05;
+        const dims = [Math.max(size.x, MIN_DIM), Math.max(size.y, MIN_DIM), Math.max(size.z, MIN_DIM)];
         modelTemplates.set(vtype, { scene: holder, size: dims, entry });
         if (vtype === 'car') { carTemplate = holder; carSize = dims; }
         resolve();
@@ -316,11 +323,16 @@ function makeVehicleMesh(vtype, spec, isObstruction) {
     });
 
     const [sx, sy, sz] = source.size;
+    // Clamped against a bad measurement (a rigged model's collapsed bind-pose
+    // axis, say) turning into a factor that fills the screen - no real
+    // vehicle/obstruction model here needs more than a 10x correction either
+    // way between its raw export size and its real-world dimensions.
+    const clampFactor = (f) => Math.min(10, Math.max(0.1, f));
     if (entry.fit === 'uniform') {
-      const factor = Math.min(length / sz, width / sx, height / sy);
+      const factor = clampFactor(Math.min(length / sz, width / sx, height / sy));
       clone.scale.set(factor, factor, factor);
     } else {
-      clone.scale.set(width / sx, height / sy, length / sz);
+      clone.scale.set(clampFactor(width / sx), clampFactor(height / sy), clampFactor(length / sz));
     }
     clone.position.y = entry.lift;   // yaw is already baked into the template
 
@@ -602,8 +614,20 @@ function zoomLabel() {
   return { label, metresPerPx, slider: Math.round(fractionForDistance(dist) * 100) };
 }
 
+// OrbitControls.getAzimuthalAngle(): 0 when the camera sits on world +Z
+// relative to its target. sumoToWorld maps SUMO's +y (which this junction's
+// arms treat as north) to world -z, so a camera parked on +Z is looking
+// toward -Z, i.e. looking north - hence the +180. Approximate (this junction
+// isn't perfectly grid-aligned to true compass directions either), good
+// enough for "which way am I facing" at a glance.
+function getHeadingDeg() {
+  if (!controls) return null;
+  const deg = controls.getAzimuthalAngle() * 180 / Math.PI;
+  return (deg + 180 + 360) % 360;
+}
+
 window.Scene3D = {
   init, resize, setGeometry, setScenery, setScheme, setShowIds, updateFrame,
-  fitJunction, fitNetwork, zoomBy, setZoomFraction, zoomLabel,
+  fitJunction, fitNetwork, zoomBy, setZoomFraction, zoomLabel, getHeadingDeg,
 };
 window.dispatchEvent(new Event('scene3d:ready'));
