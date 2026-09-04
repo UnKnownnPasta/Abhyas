@@ -1,0 +1,11 @@
+Model Information:
+* title:	BMW M3 | Low-Poly Stylized
+* source:	https://sketchfab.com/3d-models/bmw-m3-low-poly-stylized-d1a53b09c2d949b1a5e7062ada0b44ed
+* author:	kulonee (https://sketchfab.com/ynesolefru)
+
+Model License:
+* license type:	CC-BY-SA-4.0 (http://creativecommons.org/licenses/by-sa/4.0/)
+* requirements:	Author must be credited. Modified versions must have the same license. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "BMW M3 | Low-Poly Stylized" (https://sketchfab.com/3d-models/bmw-m3-low-poly-stylized-d1a53b09c2d949b1a5e7062ada0b44ed) by kulonee (https://sketchfab.com/ynesolefru) licensed under CC-BY-SA-4.0 (http://creativecommons.org/licenses/by-sa/4.0/)

@@ -1,0 +1,5 @@
+<configuration>
+    <output>
+        <tripinfo-output value="tripinfo.xml"/>
+    </output>
+</configuration>
