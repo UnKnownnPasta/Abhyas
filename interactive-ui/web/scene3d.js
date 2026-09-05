@@ -263,9 +263,24 @@ function makeFallbackVehicle(color) {
 function loadVehicleModels() {
   const loader = new GLTFLoader();
 
-  function tryFiles(vtype, entry, names) {
-    if (!names.length) return Promise.resolve();
+  function tryFiles(vtype, entry, names, tried) {
+    tried = tried || [];
+    if (!names.length) {
+      // Falling back to a scaled car is a reasonable thing to draw and a
+      // terrible thing to do quietly: a bus rendered as a stretched car looks
+      // enough like a bug in the simulation that you go looking in the wrong
+      // place. Say which model is missing and what is standing in for it.
+      if (tried.length) {
+        console.warn('[abhyas] no model loaded for "' + vtype + '" (tried ' +
+          tried.join(', ') + '). Drawing a scaled car instead. Check the file ' +
+          'is under web/assets/' + entry.dir + '/ and reloads without a 404 - ' +
+          'a stale cached copy of a model that used to live at that path will ' +
+          'do this too.');
+      }
+      return Promise.resolve();
+    }
     const url = '/web/assets/' + entry.dir + '/' + names[0];
+    tried.push(url);
     return new Promise((resolve) => {
       loader.load(url, (gltf) => {
         const holder = new THREE.Group();
@@ -285,7 +300,8 @@ function loadVehicleModels() {
         modelTemplates.set(vtype, { scene: holder, size: dims, entry });
         if (vtype === 'car') { carTemplate = holder; carSize = dims; }
         resolve();
-      }, undefined, () => resolve(tryFiles(vtype, entry, names.slice(1))));
+      }, undefined,
+         () => resolve(tryFiles(vtype, entry, names.slice(1), tried)));
     });
   }
 

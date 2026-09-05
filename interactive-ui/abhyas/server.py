@@ -1018,4 +1018,28 @@ async def listen(request: Request, filename: str = "recording.webm"):
     return JSONResponse(result)
 
 
-app.mount("/web", StaticFiles(directory=str(C.WEB)), name="web")
+class RevalidatingStatics(StaticFiles):
+    """Static files that must be re-checked before they are reused.
+
+    Without a Cache-Control header a browser applies "heuristic freshness":
+    it invents an expiry from the file's age and serves its copy for hours
+    without asking us anything. That is fine for a URL whose contents never
+    change and wrong for every URL here, because this project swaps what
+    lives at a fixed path - assets/bus/scene.gltf held a truck model before it
+    held a bus, and a browser that had the truck cached kept drawing a truck
+    for every bus on the road with no way to tell.
+
+    no-cache does not mean "do not store", it means "revalidate before use".
+    The ETag StaticFiles already sends turns that into a 304 on everything
+    unchanged, so the cost is one conditional request per file per load and
+    the payoff is that editing app.js or dropping in a new model is visible on
+    reload instead of whenever the browser next feels like asking.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
+app.mount("/web", RevalidatingStatics(directory=str(C.WEB)), name="web")
