@@ -112,12 +112,20 @@ ARCHIVE_FINAL_PREFIX = "final "
 # So pin everything to the venv copy.
 
 def _venv_sumo_home():
-    candidate = Path(sys.prefix) / "Lib" / "site-packages" / "sumo"
-    if not candidate.exists():
-        for lib in (Path(sys.prefix) / "lib").glob("python*/site-packages/sumo"):
-            candidate = lib
-            break
-    return candidate if candidate.exists() else None
+    """Find wherever pip put the eclipse-sumo data package.
+
+    Guessing site-packages off sys.prefix breaks the moment pip installs to
+    the user site instead (no active venv, no write access to the system
+    prefix - exactly what a shared container gives you). find_spec walks the
+    real sys.path, so it finds the package wherever it actually landed.
+    """
+    import importlib.util
+    spec = importlib.util.find_spec("sumo")
+    if spec and spec.submodule_search_locations:
+        candidate = Path(list(spec.submodule_search_locations)[0])
+        if candidate.exists():
+            return candidate
+    return None
 
 
 SUMO_HOME = _venv_sumo_home()
