@@ -7,6 +7,7 @@ import urllib.request
 from . import config as C
 from . import controls as K
 from . import nlu
+from . import stt
 
 # The only actions the model may return instead of edits: the ones that move
 # no dial. Anything that does move one comes back as edits, so it goes through
@@ -19,17 +20,16 @@ BASE_URL = os.environ.get("ABHYAS_LLM_BASE_URL", "https://api.groq.com/openai/v1
 MODEL = os.environ.get("ABHYAS_LLM_MODEL", "openai/gpt-oss-120b")
 TIMEOUT_S = float(os.environ.get("ABHYAS_LLM_TIMEOUT_S", "12"))
 
-DEEPGRAM_KEY_ENV = "ABHYAS_DEEPGRAM_API_KEY"
-DEEPGRAM_MODEL = os.environ.get("ABHYAS_DEEPGRAM_MODEL", "nova-2")
-DEEPGRAM_URL = "wss://api.deepgram.com/v1/listen"
 
 
 def llm_available():
     return bool(os.environ.get(API_KEY_ENV))
 
 
-def deepgram_available():
-    return bool(os.environ.get(DEEPGRAM_KEY_ENV))
+def stt_available():
+    """Speech to text lives in stt.py now. Re-exported here because the server
+    and the CLI have always asked voice.py whether the mic is worth offering."""
+    return stt.available()
 
 
 def backend_status():
@@ -44,13 +44,7 @@ def backend_status():
                   "offline": True,
                   "note": "Parsed on this machine. Set " + API_KEY_ENV
                           + " to have a model write the settings instead."}
-    if deepgram_available():
-        status["stt"] = {"backend": "deepgram", "model": DEEPGRAM_MODEL,
-                         "note": "Mic audio is streamed to Deepgram."}
-    else:
-        status["stt"] = {"backend": None, "model": None,
-                         "note": "Voice input is off. Set " + DEEPGRAM_KEY_ENV
-                                 + " to enable it."}
+    status["stt"] = stt.status()
     return status
 
 
@@ -293,47 +287,6 @@ def unread_families(utterance, action):
               if re.search(pattern, utterance.lower())}
     read = FAMILY_OF_ACTION.get(action)
     return sorted(spoken - {read}) if read and len(spoken) > 1 else []
-
-
-class TranscriptAssembler:
-
-    def __init__(self):
-        self.segments = []
-
-    def sentence(self):
-        return " ".join(self.segments).strip()
-
-    def flush(self):
-        sentence = self.sentence()
-        self.segments = []
-        return [("final", sentence)] if sentence else []
-
-
-    FLUSH_EVENTS = ("Metadata", "UtteranceEnd")
-
-    def feed(self, event):
-        """One Deepgram message -> the ('partial'|'final', text) to send on."""
-        kind = event.get("type")
-        if kind in self.FLUSH_EVENTS:
-            return self.flush()
-
-        channel = event.get("channel")
-        if not isinstance(channel, dict):
-            return []                    # SpeechStarted and anything else new
-        alternatives = channel.get("alternatives") or [{}]
-        first = alternatives[0] if isinstance(alternatives[0], dict) else {}
-        text = first.get("transcript", "")
-        if not text:
-            return []
-
-        if not event.get("is_final"):
-            # still being revised, show it against what's already settled
-            return [("partial", " ".join(self.segments + [text]).strip())]
-
-        self.segments.append(text)
-        if event.get("speech_final"):
-            return self.flush()
-        return [("partial", self.sentence())]
 
 
 def _error_detail(exc):

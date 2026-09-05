@@ -48,8 +48,9 @@ During the Blueprint creation (or under Service Settings -> Environment), config
 | `PORT` | Auto | Port exposed by the web service | `8000` |
 | `ABHYAS_PHASE_PLAN` | No | Signal plan (`four_phase` or `two_phase`) | `four_phase` |
 | `RENDER_WORKFLOW_ENABLED` | No | Enable Render Cloud Workflows dispatch (needs a paid worker service) | `false` |
-| `ABHYAS_DEEPGRAM_API_KEY` | Optional | Deepgram key for browser speech recognition | Unset |
-| `ABHYAS_LLM_API_KEY` | Optional | LLM API key for plain-English sentence parser | Unset |
+| `ABHYAS_LLM_API_KEY` | Optional | LLM API key for the plain-English sentence parser. Also covers speech-to-text unless `ABHYAS_STT_API_KEY` is set | Unset |
+| `ABHYAS_STT_API_KEY` | Optional | Separate key for Whisper transcription. Only needed to point speech at a different account | Unset |
+| `ABHYAS_STT_MODEL` | Optional | Whisper model identifier | `whisper-large-v3` |
 | `ABHYAS_LLM_MODEL` | Optional | Model identifier | `openai/gpt-oss-120b` |
 
 No `RENDER_API_KEY` is needed for the free-tier setup - it's only relevant if you later move to a paid plan and want `abhyas.workflows` to dispatch to Render's actual Workflows execution engine instead of running jobs in-process.

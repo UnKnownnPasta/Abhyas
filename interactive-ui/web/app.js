@@ -19,6 +19,10 @@ const state = {
   scheme: 'dark',
   showIds: false,
   listening: false,
+  // the gap between "stop" and the transcript coming back. With a streaming
+  // transcriber there were interim captions to fill it; there aren't now, so
+  // the blob has to say something or the tap looks like it did nothing.
+  transcribing: false,
   micPermission: 'unknown',
   micLevel: 0,
   busy: false,
@@ -970,10 +974,11 @@ function drawBlob() {
   const ctx = blobCtx();
   const size = 162, mid = size / 2;
   ctx.clearRect(0, 0, size, size);
-  blobPhase += state.listening ? 0.055 : (state.busy ? 0.04 : 0.014);
+  const working = state.busy || state.transcribing;
+  blobPhase += state.listening ? 0.055 : (working ? 0.04 : 0.014);
 
   const energy = state.listening ? 0.35 + state.micLevel * 0.9
-                                 : (state.busy ? 0.3 : 0.12);
+                                 : (working ? 0.3 : 0.12);
   const base = 52 + (state.listening ? 6 : 0);
   const rings = [
     { r: base + 11, alpha: 0.13, speed: 0.7, lobes: 3 },
@@ -1001,7 +1006,7 @@ function drawBlob() {
       grad.addColorStop(0, 'rgba(89,194,255,' + ring.alpha + ')');
       grad.addColorStop(0.5, 'rgba(127,123,255,' + ring.alpha + ')');
       grad.addColorStop(1, 'rgba(61,220,151,' + ring.alpha + ')');
-    } else if (state.busy) {
+    } else if (working) {
       grad.addColorStop(0, 'rgba(255,200,87,' + ring.alpha + ')');
       grad.addColorStop(1, 'rgba(127,123,255,' + ring.alpha + ')');
     } else {
@@ -1019,10 +1024,21 @@ function drawBlob() {
 }
 
 /* ================================================================ voice */
+//
+// Record, stop, upload once, get a proposal back. There is no socket and no
+// live caption: the transcriber reads a whole clip, so the words arrive when
+// the clip does. The blob's colour is still the state readout (see drawBlob),
+// and the mic level meter still runs locally off the analyser - that never
+// went through the network in the first place.
 
 let audioCtx = null, analyser = null, micStream = null;
-let voiceSocket = null, mediaRecorder = null, flushTimer = null;
+let mediaRecorder = null, recordedChunks = [];
 let sttAvailable = false;
+
+// Long enough for any instruction this junction takes, short enough that a
+// mic left on by accident doesn't upload a meeting.
+const MAX_RECORDING_MS = 45000;
+let recordingTimeout = null;
 
 async function loadVoiceBackend() {
   try {
@@ -1059,42 +1075,54 @@ function reflectMic() {
   }
 }
 
-function handleVoiceMessage(event) {
-  let msg;
-  try { msg = JSON.parse(event.data); } catch (err) { return; }
+// What the recorder can actually produce varies by browser, and the
+// transcriber picks its decoder off the file extension, so the two have to
+// agree. Ask for opus, take what we get, and name the file after it.
+const RECORDER_MIMES = [
+  { mime: 'audio/webm;codecs=opus', ext: 'webm' },
+  { mime: 'audio/ogg;codecs=opus', ext: 'ogg' },
+  { mime: 'audio/webm', ext: 'webm' },
+  { mime: 'audio/mp4', ext: 'mp4' },
+];
 
-  if (msg.type === 'partial') {
-    $('ask').value = msg.text;
-    setMicState('“' + msg.text + '”', 'ok');
-  } else if (msg.type === 'voice_result') {
-    stopListening();
-    closeVoiceSocket();
-    renderProposal(msg, msg.utterance);
-  } else if (msg.type === 'unavailable') {
-    sttAvailable = false;
-    $('mic').disabled = true;
-    stopListening();
-    toast(msg.reason || 'Voice input is off.', 'warn');
-  } else if (msg.type === 'voice_error') {
-    stopListening();
-    toast('Voice input stopped: ' + (msg.reason || 'unknown error'), 'bad');
+function pickRecorderFormat() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  for (const option of RECORDER_MIMES) {
+    if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(option.mime)) {
+      return option;
+    }
   }
+  return { mime: '', ext: 'webm' };
+}
+
+function extForBlobType(type, fallback) {
+  const value = (type || '').toLowerCase();
+  if (value.includes('ogg')) return 'ogg';
+  if (value.includes('mp4') || value.includes('m4a')) return 'mp4';
+  if (value.includes('webm')) return 'webm';
+  return fallback || 'webm';
 }
 
 async function startListening() {
   if (state.listening || !sttAvailable) return;
-  state.listening = true;
-  setMicState('Listening — tap to stop', 'ok');
+
+  const format = pickRecorderFormat();
+  if (!format) {
+    toast('This browser cannot record audio. Type the instruction instead.', 'bad');
+    return;
+  }
 
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     state.micPermission = 'granted';
   } catch (err) {
     state.micPermission = 'denied';
-    state.listening = false;
     reflectMic();
     return;
   }
+
+  state.listening = true;
+  setMicState('Listening — tap to stop', 'ok');
 
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const source = audioCtx.createMediaStreamSource(micStream);
@@ -1103,27 +1131,33 @@ async function startListening() {
   source.connect(analyser);
   pollLevel();
 
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  voiceSocket = new WebSocket(protocol + '//' + location.host + '/ws/voice');
-  voiceSocket.binaryType = 'arraybuffer';
-  voiceSocket.onmessage = handleVoiceMessage;
-  voiceSocket.onerror = () => {
-    if (state.listening) toast('Voice socket error — check the connection.', 'bad');
+  recordedChunks = [];
+  try {
+    mediaRecorder = format.mime
+      ? new MediaRecorder(micStream, { mimeType: format.mime })
+      : new MediaRecorder(micStream);
+  } catch (err) {
+    releaseMic();
+    state.listening = false;
+    toast('Could not start the recorder: ' + err.message, 'bad');
+    return;
+  }
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size) recordedChunks.push(e.data);
   };
-  voiceSocket.onclose = () => {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-    if (state.listening) stopListening();
-  };
-  voiceSocket.onopen = () => {
-    mediaRecorder = new MediaRecorder(micStream, { mimeType: 'audio/webm;codecs=opus' });
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size && voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-        voiceSocket.send(e.data);
-      }
-    };
-    mediaRecorder.start(250);
-  };
+  mediaRecorder.onstop = () => finishRecording(format.ext);
+  // one chunk a second, so a recorder that is stopped abruptly has still
+  // handed over most of what it heard
+  mediaRecorder.start(1000);
+
+  clearTimeout(recordingTimeout);
+  recordingTimeout = setTimeout(() => {
+    if (state.listening) {
+      toast('Stopped recording at 45 seconds — one instruction at a time.', 'warn');
+      stopListening();
+    }
+  }, MAX_RECORDING_MS);
 }
 
 function pollLevel() {
@@ -1136,53 +1170,83 @@ function pollLevel() {
   requestAnimationFrame(pollLevel);
 }
 
+function releaseMic() {
+  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; analyser = null; }
+}
+
 function stopListening() {
   if (!state.listening) return;
   state.listening = false;
   state.micLevel = 0;
+  clearTimeout(recordingTimeout);
+  recordingTimeout = null;
 
   const recorder = mediaRecorder;
-  mediaRecorder = null;
   if (recorder && recorder.state !== 'inactive') {
-    recorder.onstop = requestFlush;
-    try { recorder.stop(); } catch (err) { requestFlush(); }
+    // onstop does the upload - stopping flushes the last chunk first, and
+    // uploading before that arrives loses the end of the sentence
+    try { recorder.stop(); } catch (err) { finishRecording('webm'); }
   } else {
-    requestFlush();
+    finishRecording('webm');
   }
-
-  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
-  if (audioCtx) { audioCtx.close(); audioCtx = null; analyser = null; }
   reflectMic();
 }
 
-function requestFlush() {
-  if (!voiceSocket || voiceSocket.readyState !== WebSocket.OPEN) {
-    closeVoiceSocket();
+async function finishRecording(fallbackExt) {
+  const recorder = mediaRecorder;
+  mediaRecorder = null;
+  const chunks = recordedChunks;
+  recordedChunks = [];
+  releaseMic();
+
+  if (!chunks.length) {
+    setMicState('Nothing was recorded — type the instruction below', 'warn');
     return;
   }
-  try {
-    voiceSocket.send(JSON.stringify({ type: 'stop' }));
-  } catch (err) {
-    closeVoiceSocket();
-    return;
-  }
-  setMicState('Transcribing what you said…');
-  clearTimeout(flushTimer);
-  flushTimer = setTimeout(() => {
-    if (voiceSocket) {
-      setMicState('Nothing came back from the transcriber — type it below instead', 'warn');
-    }
-    closeVoiceSocket();
-  }, 6000);
+
+  const type = (recorder && recorder.mimeType) || chunks[0].type || 'audio/webm';
+  const blob = new Blob(chunks, { type });
+  await uploadRecording(blob, 'recording.' + extForBlobType(type, fallbackExt));
 }
 
-function closeVoiceSocket() {
-  clearTimeout(flushTimer);
-  flushTimer = null;
-  if (voiceSocket) {
-    try { voiceSocket.close(); } catch (err) { /* ignore */ }
-    voiceSocket = null;
+async function uploadRecording(blob, filename) {
+  setMicState('Transcribing what you said…');
+  state.transcribing = true;
+
+  let result;
+  try {
+    // the blob is the whole body - see /api/voice/listen for why it isn't a
+    // multipart form
+    const response = await fetch(
+      '/api/voice/listen?filename=' + encodeURIComponent(filename),
+      { method: 'POST',
+        headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+        body: blob });
+    result = await response.json();
+  } catch (err) {
+    state.transcribing = false;
+    toast('Could not reach the transcriber: ' + err.message, 'bad');
+    return;
   }
+  state.transcribing = false;
+
+  if (result.type === 'unavailable') {
+    sttAvailable = false;
+    $('mic').disabled = true;
+    toast(result.reason || 'Voice input is off.', 'warn');
+    return;
+  }
+  if (result.type === 'voice_error' || result.ok === false && !result.utterance) {
+    // a transcript that came back but didn't parse is still worth showing -
+    // put it in the box so it can be edited rather than said again
+    if (result.transcript) $('ask').value = result.transcript;
+    toast('Voice input stopped: ' + (result.reason || 'unknown error'), 'bad');
+    return;
+  }
+
+  $('ask').value = result.transcript || result.utterance || '';
+  renderProposal(result, result.utterance);
 }
 
 /* ---- sentence -> proposed dial moves ---- */

@@ -80,7 +80,8 @@ interactive-ui/
     controls.py            every knob, declared once
     versions.py            named states as a tree (VersionStore)
     nlu.py / voice.py      text -> instruction, optional hosted fallback
-    selftest.py            eleven checks on the whole pipeline
+    stt.py                 a recording -> text (Whisper, one upload)
+    selftest.py            thirteen checks on the whole pipeline
     server.py              FastAPI + websocket back end
   web/                     the browser front end
 ```
@@ -156,15 +157,18 @@ project.
 
 ## Things worth knowing
 
-- Everything runs locally. Two optional backends go out: Deepgram for speech,
-  and a hosted model for sentences the local rules can't place. Both are off
-  unless their key is in the environment, and the banner says which are live.
+- Everything runs locally. Two optional backends go out, both to the same
+  provider and both covered by one key: Whisper transcribes a recording after
+  you stop speaking, and a hosted model reads the sentence the local rules
+  can't place. Both are off unless the key is in the environment, and the
+  banner says which are live. Transcription is not streaming - there are no
+  live captions, the sentence arrives once.
 - One dial is fitted to data: vehicles per hour. Turning splits are a declared
   prior and get swept, never fitted.
 - The network build makes five hand repairs that OSM/netconvert got wrong
   *silently* - the joined node's y coordinate, the four node join, missing lane
   tags, the lane assignment at the stop line, and a 100 km/h speed limit on an
   Indiranagar arterial. They're all written to `build/network-changelog.txt`.
-- `run.py --check` runs eleven checks. The last one cuts a green in half and
+- `run.py --check` runs thirteen checks. The last one cuts a green in half and
   asserts the queue actually moved, because a misconfigured SUMO will happily
   run a normal looking simulation using none of your settings.

@@ -264,63 +264,91 @@ def _nlu():
             + group + (" and says it's shared" if shared else ""))
 
 
-@check("A dictated sentence survives the trip in one piece")
-def _transcript_assembly():
-    """Deepgram hands back a sentence in pieces and the pieces have to be glued.
-
-    Reading one on its own gave the parser the tail of the sentence, and a
-    stream closed mid-sentence gave it nothing at all, which is what "the mic
-    does nothing when I stop talking" turned out to be.
+@check("A recording is checked before it is uploaded, and a transcript still "
+       "goes through the closed parser")
+def _speech_to_text():
+    """The streaming transcriber is gone and so is the sentence assembler it
+    needed. What replaced it is one upload, which moves the failure modes:
+    instead of "the stream closed mid-sentence", it is "the recorder produced
+    a container header and no audio" and "the browser handed us a format the
+    transcriber cannot read". Both used to surface as an opaque HTTP error
+    from someone else's API.
     """
-    from .voice import TranscriptAssembler
+    from . import stt
+    from . import voice
 
-    def chunk(text, is_final=False, speech_final=False):
-        return {"type": "Results",
-                "channel": {"alternatives": [{"transcript": text}]},
-                "is_final": is_final, "speech_final": speech_final}
+    # -- what we can tell about a clip without spending a round trip on it --
+    audio = b"\x00" * (stt.MIN_BYTES + 10)
 
-    # vad_events=true puts these in the stream and their channel is a LIST,
-    # not an object. Feeding one to .get() killed the whole pump task.
-    speech_started = {"type": "SpeechStarted", "channel": [0, 1], "timestamp": 1.2}
-    utterance_end = {"type": "UtteranceEnd", "channel": [0, 1], "last_word_end": 3.4}
+    try:
+        stt.check(audio, "recording.txt")
+        raise Failure("a .txt file was accepted as audio")
+    except stt.Rejected as exc:
+        require("not an audio format" in str(exc),
+                "wrong-format rejection didn't say what was wrong: " + str(exc))
 
-    def finals(events, flush=True):
-        assembler = TranscriptAssembler()
-        out = []
-        for event in events:
-            out.extend(assembler.feed(event))
-        if flush:
-            out.extend(assembler.flush())
-        return [text for kind, text in out if kind == "final"]
+    try:
+        stt.check(b"\x00" * 12, "recording.webm")
+        raise Failure("an empty recording was accepted")
+    except stt.Rejected as exc:
+        require("empty" in str(exc).lower(),
+                "empty-recording rejection didn't say so: " + str(exc))
 
-    whole = finals([speech_started,
-                    chunk("add ten"),
-                    chunk("add ten seconds", is_final=True),
-                    chunk("to the north", is_final=True),
-                    chunk("approach green", is_final=True, speech_final=True)])
-    require(whole == ["add ten seconds to the north approach green"],
-            "a sentence finalised in pieces came back as " + str(whole))
+    try:
+        stt.check(b"\x00" * (stt.MAX_BYTES + 1), "recording.webm")
+        raise Failure("an oversized recording was accepted")
+    except stt.Rejected:
+        pass
 
-    stopped = finals([chunk("put a cow", is_final=True),
-                      chunk("on the east approach", is_final=True),
-                      {"type": "Metadata"}], flush=False)
-    require(stopped == ["put a cow on the east approach"],
-            "stopping mid-sentence produced " + str(stopped)
-            + " - speech_final is never raised on close, so Metadata has to flush")
+    # every format the browser's MediaRecorder can actually produce has to be
+    # one the transcriber will take, or the mic works on one browser only
+    for produced in ("webm", "ogg", "mp4"):
+        require(produced in stt.ALLOWED_EXTENSIONS,
+                "MediaRecorder can produce ." + produced + " and the uploader "
+                "would reject it")
+    require(stt.check(audio, "recording.WEBM") == "webm",
+            "the extension check is case-sensitive, and browsers are not")
 
-    ended = finals([chunk("clear the road", is_final=True), utterance_end],
-                   flush=False)
-    require(ended == ["clear the road"],
-            "UtteranceEnd should flush too, got " + str(ended))
+    # -- no key must be a sentence, not a traceback -------------------------
+    import os
+    saved = {name: os.environ.pop(name, None)
+             for name in (stt.API_KEY_ENV, stt.FALLBACK_KEY_ENV)}
+    try:
+        require(not stt.available(), "reports a transcriber with no key set")
+        require(voice.backend_status()["stt"]["backend"] is None,
+                "the status endpoint claims speech-to-text with no key")
+        try:
+            stt.transcribe(audio, "recording.webm")
+            raise Failure("transcribe() ran with no key")
+        except stt.Unavailable:
+            pass
+    finally:
+        for name, value in saved.items():
+            if value is not None:
+                os.environ[name] = value
 
-    require(finals([chunk("")], flush=True) == [], "silence produced a proposal")
+    # -- and whatever comes back is still only a proposal --------------------
+    # A transcriber that mishears is the whole risk of this path. The guard is
+    # that its output goes through the same closed vocabulary as typed text and
+    # comes back as a card, never as an applied change.
+    from . import controls as K
+    from . import demand as D
+    from . import tls as T
+    live = K.state_of(T.baseline_plan(), D.DemandSpec(), [])
 
-    # anything that isn't a transcript must not take the pump down with it
-    for junk in ({"type": "Error"}, {"type": "Results", "channel": None},
-                 {"type": "Results", "channel": {"alternatives": []}}, {}):
-        TranscriptAssembler().feed(junk)
+    heard = voice.interpret("add ten seconds to the northbound green", live,
+                            allow_llm=False)
+    require(heard["ok"] and heard["edits"], "a clean transcript proposed nothing")
+    require(all(edit["id"] in K.all_controls() for edit in heard["edits"]),
+            "a transcript produced an edit for a control that doesn't exist")
 
-    return "glues pieces, flushes on stop, survives the vad frames"
+    misheard = voice.interpret("add ten seconds to the flyover", live,
+                               allow_llm=False)
+    require(not misheard["ok"] and not misheard["edits"],
+            "a misheard sentence reached the controls instead of being refused")
+
+    return ("rejects bad clips before upload, says so without a key, and every "
+            "transcript still lands as a proposal")
 
 
 @check("The same seed gives the same answer twice")

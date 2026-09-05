@@ -176,7 +176,7 @@ class Abhyas:
         self.out.kv("Incidents", self.files["incidents"].name)
         self.out.kv("SUMO", str(C.SUMO_HOME))
         self.out.kv("Signal plan", C.PHASE_PLANS[C.ACTIVE_PHASE_PLAN]["label"])
-        self.out.kv("Speech", status["stt"]["model"] or "off (no Deepgram key)")
+        self.out.kv("Speech", status["stt"]["model"] or "off (no key)")
         self.out.kv("Text fallback", status["model"] or "off, local rules only")
 
     def menu(self):

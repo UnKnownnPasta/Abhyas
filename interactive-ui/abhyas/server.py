@@ -19,12 +19,12 @@ import threading
 import time
 import traceback
 
-import websockets
-# Explicitly: websockets lazy-loads its submodules, so websockets.exceptions
-# is not reachable by attribute access and blows up at the moment you
-# actually need to catch something.
-from websockets.exceptions import ConnectionClosed
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+# No `import websockets` here any more. It was the client library for the
+# proxy that streamed mic audio upstream, and speech to text is a plain upload
+# now (see abhyas/stt.py). The package stays in requirements because uvicorn
+# uses it to serve OUR websockets - /ws and /ws/cli - not because this module
+# opens any.
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -38,6 +38,7 @@ from . import demand as D
 from . import netbuild
 from . import nlu
 from . import sim
+from . import stt
 from . import tls as T
 from . import versions as V
 from . import voice
@@ -955,161 +956,66 @@ async def websocket_cli(ws: WebSocket):
         bus.discard(ws)
 
 
-def _deepgram_header_kwarg():
-    """What this websockets version calls the extra-headers argument.
+# ---- speech to text ------------------------------------------------------
+#
+# One upload, one transcript. This used to be a websocket proxy that streamed
+# mic audio to a streaming transcriber and pushed interim captions back; the
+# model behind it now reads a whole clip instead, so the socket, the keepalive
+# and the sentence assembler all went with it. See abhyas/stt.py for what that
+# trades away - live captions, mostly.
 
-    Renamed extra_headers -> additional_headers when the asyncio client landed
-    in 14.0. We pin no exact version because google-genai and the realtime
-    packages cap websockets well below the newest, and one hard pin here made
-    the whole environment unresolvable. So ask the installed copy instead.
+
+@app.post("/api/voice/listen")
+async def listen(request: Request, filename: str = "recording.webm"):
+    """A recording in, the same proposal the typed box produces out.
+
+    The audio is the raw request body rather than a multipart form: it is one
+    blob from one recorder, and multipart would mean adding python-multipart
+    to a dependency list this project keeps deliberately short. The filename
+    rides in the query string because the transcriber picks its decoder off
+    the extension.
+
+    The transcript is not applied and never has been: it goes through
+    voice.interpret and comes back as a proposal for someone to accept, so a
+    misheard word is a card you reject rather than a dial that already moved.
     """
+    if not voice.stt_available():
+        return JSONResponse({"ok": False, "type": "unavailable",
+                             "reason": stt.status()["note"]}, status_code=503)
+
+    data = await request.body()
+    filename = os.path.basename(filename or "recording.webm")
     try:
-        major = int(websockets.__version__.split(".")[0])
-    except (AttributeError, ValueError):
-        major = 14                      # unknown build, assume the modern name
-    return "additional_headers" if major >= 14 else "extra_headers"
-
-
-DEEPGRAM_HEADER_KWARG = _deepgram_header_kwarg()
-
-# How often to tell Deepgram we are still here while nobody is talking.
-# Its own patience is about ten seconds.
-DEEPGRAM_KEEPALIVE_S = 5.0
-
-
-@app.websocket("/ws/voice")
-async def websocket_voice(ws: WebSocket):
-    """Browser mic audio in, live captions and a final proposal out.
-
-    A private pipe, not the shared /ws broadcast - this carries one listener's
-    raw audio to Deepgram and nothing else.
-    """
-    await ws.accept()
-    if not voice.deepgram_available():
-        await ws.send_text(json.dumps({
-            "type": "unavailable",
-            "reason": "Set ABHYAS_DEEPGRAM_API_KEY to enable voice."}))
-        await ws.close()
-        return
-
-    params = ("model=" + voice.DEEPGRAM_MODEL
-              + "&smart_format=true&interim_results=true"
-              + "&endpointing=300&vad_events=true")
-    headers = {"Authorization": "Token " + os.environ[voice.DEEPGRAM_KEY_ENV]}
-
-    async def pump_audio_in(upstream):
-        try:
-            while True:
-                message = await ws.receive()
-                if message["type"] == "websocket.disconnect":
-                    break
-                audio = message.get("bytes")
-                if audio:
-                    await upstream.send(audio)
-                    continue
-                text = message.get("text")
-                if not text:
-                    continue
-                try:
-                    payload = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if payload.get("type") == "stop":
-                    await upstream.send(json.dumps({"type": "CloseStream"}))
-        except ConnectionClosed:
-            pass                      # upstream went first, nothing to send to
-
-
-    async def keep_upstream_alive(upstream):
-        """Deepgram hangs up if nothing reaches it for about ten seconds.
-
-        Opening the mic and pausing to think is exactly that, and so is a
-        browser that takes a moment to hand over its first MediaRecorder chunk.
-        The socket died with 1011 'did not receive audio data ... within the
-        timeout window' and took the transcript pump down with it.
-        """
-        try:
-            while True:
-                await asyncio.sleep(DEEPGRAM_KEEPALIVE_S)
-                await upstream.send(json.dumps({"type": "KeepAlive"}))
-        except (asyncio.CancelledError, ConnectionClosed):
-            pass
-
-    assembler = voice.TranscriptAssembler()
-
-    async def send_transcript(kind, text):
-        if kind == "partial":
-            await ws.send_text(json.dumps({"type": "partial", "text": text}))
-            return
-        result = voice.interpret(text, current_control_state(), allow_llm=True)
-        result["backend"] = voice.backend_status()
-        result["utterance"] = text
-        await ws.send_text(json.dumps({"type": "voice_result", **result}))
-
-    async def pump_transcripts_out(upstream):
-        dropped = None
-        try:
-            async for raw in upstream:
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                for kind, text in assembler.feed(event):
-                    await send_transcript(kind, text)
-        except ConnectionClosed as exc:
-            # Expected after CloseStream, and also what the silence timeout
-            # looks like. Neither is a reason to let the task die unhandled.
-            dropped = exc
-        finally:
-            # whatever was said before the socket went still belongs to the user
-            try:
-                for kind, text in assembler.flush():
-                    await send_transcript(kind, text)
-            except Exception:
-                pass
-
-        if dropped is not None and "did not receive audio" in str(dropped):
-            try:
-                await ws.send_text(json.dumps({
-                    "type": "voice_error",
-                    "reason": "the transcriber heard no audio and closed the "
-                              "connection. Check the microphone is actually "
-                              "sending, then try again."}))
-            except Exception:
-                pass
-
-    try:
-        connect_kwargs = {DEEPGRAM_HEADER_KWARG: headers}
-        async with websockets.connect(voice.DEEPGRAM_URL + "?" + params,
-                                      **connect_kwargs) as upstream:
-            in_task = asyncio.create_task(pump_audio_in(upstream))
-            out_task = asyncio.create_task(pump_transcripts_out(upstream))
-            alive_task = asyncio.create_task(keep_upstream_alive(upstream))
-            done, pending = await asyncio.wait({in_task, out_task},
-                                               return_when=asyncio.FIRST_COMPLETED)
-            alive_task.cancel()
-            for task in pending:
-                task.cancel()
-            # collect them so a failure is reported here rather than surfacing
-            # later as "Task exception was never retrieved"
-            for task in done:
-                exc = task.exception()
-                if exc:
-                    raise exc
-    except WebSocketDisconnect:
-        pass
+        transcript, seconds = await asyncio.to_thread(
+            stt.transcribe, data, filename)
+    except stt.Rejected as exc:
+        return JSONResponse({"ok": False, "type": "voice_error",
+                             "reason": str(exc)}, status_code=400)
+    except stt.Unavailable as exc:
+        return JSONResponse({"ok": False, "type": "unavailable",
+                             "reason": str(exc)}, status_code=503)
     except Exception as exc:
-        try:
-            await ws.send_text(json.dumps({
-                "type": "voice_error",
-                "reason": type(exc).__name__ + ": " + str(exc)}))
-        except Exception:
-            pass
-    finally:
-        try:
-            await ws.close()
-        except Exception:
-            pass
+        return JSONResponse({"ok": False, "type": "voice_error",
+                             "reason": stt.error_detail(exc)}, status_code=502)
+
+    # Whisper answers something for almost any audio, including silence. An
+    # empty answer is the one case where it admits it heard nothing, and
+    # handing that to the parser would produce a rejection about vocabulary
+    # when the real problem was the microphone.
+    if not transcript:
+        return JSONResponse({"ok": False, "type": "voice_error",
+                             "transcript": "", "seconds": round(seconds, 2),
+                             "reason": "Nothing was transcribed from that "
+                                       "recording. Check the microphone is "
+                                       "not muted, or type the instruction."})
+
+    result = voice.interpret(transcript, current_control_state(), allow_llm=True)
+    result["backend"] = voice.backend_status()
+    result["utterance"] = transcript
+    result["transcript"] = transcript
+    result["seconds"] = round(seconds, 2)
+    result["type"] = "voice_result"
+    return JSONResponse(result)
 
 
 app.mount("/web", StaticFiles(directory=str(C.WEB)), name="web")

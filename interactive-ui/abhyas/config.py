@@ -22,9 +22,13 @@ for d in (BUILD, RESULTS, DOCS, RUNS, DATA):
 
 
 # .env keys live under their vendor names, we read them under ours
+# Speech and the sentence parser are both Groq, so one vendor key fills both
+# of ours. stt.py falls back to ABHYAS_LLM_API_KEY anyway; naming it here too
+# means `GET /api/voice/status` reports the right key when someone goes
+# looking for which one is missing.
 ENV_ALIASES = {
     "ABHYAS_LLM_API_KEY": "GROQ_API_KEY",
-    "ABHYAS_DEEPGRAM_API_KEY": "DEEPGRAM_API",
+    "ABHYAS_STT_API_KEY": "GROQ_API_KEY",
 }
 
 

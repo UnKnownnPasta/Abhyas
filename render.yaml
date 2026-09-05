@@ -41,9 +41,11 @@ services:
         value: four_phase
       - key: RENDER_WORKFLOW_ENABLED
         value: "false"
-      - key: ABHYAS_DEEPGRAM_API_KEY
-        sync: false
       - key: ABHYAS_LLM_API_KEY
         sync: false
+      - key: ABHYAS_STT_API_KEY
+        sync: false
+      - key: ABHYAS_STT_MODEL
+        value: whisper-large-v3
       - key: ABHYAS_LLM_MODEL
         value: openai/gpt-oss-120b

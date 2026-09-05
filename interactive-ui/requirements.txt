@@ -20,11 +20,14 @@ fastapi==0.141.1
 uvicorn==0.52.4
 pydantic==2.13.4
 
-# upstream websocket client for the /ws/voice -> Deepgram proxy.
+# uvicorn's websocket implementation - this is what serves /ws and /ws/cli.
+# It used to also be the client library for the speech proxy; that proxy is
+# gone (transcription is a plain upload now, see abhyas/stt.py) but the server
+# still needs this to speak websockets at all.
+#
 # Deliberately a range, not a pin. google-genai and the realtime packages cap
 # websockets a long way below the newest release, and pinning 17.1 here left
-# pip with nothing to resolve to. server.py asks the installed copy whether it
-# wants extra_headers or additional_headers, so anything in this range works.
+# pip with nothing to resolve to.
 websockets>=12,<18
 
 # Render Workflows SDK

@@ -24,9 +24,12 @@ services:
       - "127.0.0.1:8000:8000"
 
     environment:
-      # both optional, both degrade to a clear "off" when unset
-      ABHYAS_DEEPGRAM_API_KEY: "${ABHYAS_DEEPGRAM_API_KEY:-}"
+      # both optional, both degrade to a clear "off" when unset.
+      # ABHYAS_LLM_API_KEY covers speech-to-text too - Whisper is hosted by
+      # the same provider - unless ABHYAS_STT_API_KEY names another.
       ABHYAS_LLM_API_KEY: "${ABHYAS_LLM_API_KEY:-}"
+      ABHYAS_STT_API_KEY: "${ABHYAS_STT_API_KEY:-}"
+      ABHYAS_STT_MODEL: "${ABHYAS_STT_MODEL:-whisper-large-v3}"
       ABHYAS_LLM_MODEL: "${ABHYAS_LLM_MODEL:-openai/gpt-oss-120b}"
       # two_phase or four_phase, see config.DEFAULT_PHASE_PLAN
       ABHYAS_PHASE_PLAN: "${ABHYAS_PHASE_PLAN:-four_phase}"

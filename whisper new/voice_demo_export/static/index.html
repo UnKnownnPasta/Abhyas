@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Transcriber</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Voice Transcriber</h1>
+      <p class="subtitle">English only &middot; optimized for Indian English accents</p>
+    </header>
+
+    <main class="card">
+      <section class="record-section">
+        <button id="recordBtn" class="record-btn" aria-label="Start recording" title="Click to record">
+          <svg id="micIcon" width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+          <svg id="stopIcon" width="30" height="30" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+            <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+          </svg>
+        </button>
+
+        <div class="recording-status">
+          <span id="statusText" class="status">Click to start recording</span>
+          <span id="timer" class="timer">0:00</span>
+        </div>
+
+        <canvas id="meter" width="300" height="60"></canvas>
+      </section>
+
+      <div class="divider"><span>or</span></div>
+
+      <section class="file-section">
+        <label class="file-drop" id="fileDrop" for="fileInput">
+          <span>Upload an audio file</span>
+          <small>wav, mp3, webm, ogg, flac, m4a &middot; max 25 MB</small>
+        </label>
+        <input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.webm,.ogg,.flac,.m4a,.oga,.mp4,.aac" hidden>
+      </section>
+
+      <section class="result-section">
+        <div id="resultBox" class="result-box">
+          <span class="placeholder">Your transcription will appear here.</span>
+        </div>
+        <div id="errorBox" class="error" hidden></div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Powered by Groq Whisper &middot; speak in English, the Indian accent is welcome.</p>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
