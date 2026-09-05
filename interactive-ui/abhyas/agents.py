@@ -43,7 +43,13 @@ def run_worker(payload):
     from . import sim
 
     try:
-        spec = D.DemandSpec(**payload["spec"])
+        # to_dict() also carries derived fields ("exploratory") that aren't
+        # constructor arguments. Filter rather than letting a reporting field
+        # decide whether a worker starts.
+        fields = payload["spec"]
+        allowed = ("veh_per_hour", "arm_share", "turning_splits", "seed",
+                   "duration_s") + D.DemandSpec.LEVERS
+        spec = D.DemandSpec(**{k: v for k, v in fields.items() if k in allowed})
         plan = payload.get("plan") or T.baseline_plan()
         result = sim.run_once(spec, plan=plan, seed=payload["seed"],
                               obstructions=payload.get("obstructions"))

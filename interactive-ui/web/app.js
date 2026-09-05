@@ -469,8 +469,98 @@ function renderSurface(surface) {
 
   refreshTrafficModal(trafficControls);
   refreshObstructionModal(obstructionControls);
+  refreshFleetModal(surface);
 
   renderLegacyControlDeck(surface);
+}
+
+function refreshFleetModal(surface) {
+  const body = $('fleet-modal-body');
+  if (!body) return;
+  const banner = $('fleet-exploratory-note');
+  // said once, at the top, rather than repeated on twenty-nine dials
+  if (banner) banner.textContent = surface.exploratory_note || '';
+  body.innerHTML = '';
+  buildAccessGrid(body, surface.controls.filter((c) => c.group === 'Access'));
+  for (const control of surface.controls.filter((c) => c.group === 'Fleet')) {
+    body.appendChild(buildControl(control));
+  }
+}
+
+// Five classes x four arms is twenty toggles. As a list that is unreadable;
+// as a grid it is the question people actually ask - who is allowed on which
+// approach.
+function buildAccessGrid(body, controls) {
+  if (!controls.length) return;
+  const classes = [];
+  const seen = new Set();
+  for (const c of controls) {
+    const name = c.id.split('.')[1];
+    if (seen.has(name)) continue;
+    seen.add(name);
+    classes.push({ name, label: c.label.replace(/^No /, '').replace(/ on [NSEW]$/, '') });
+  }
+
+  const box = document.createElement('div');
+  box.className = 'access-grid';
+  box.innerHTML = '<div class="access-head"><span>Banned from</span>' +
+    DIRS.map((d) => '<span>' + d + '</span>').join('') + '</div>';
+
+  for (const { name, label } of classes) {
+    const row = document.createElement('div');
+    row.className = 'access-row';
+    row.innerHTML = '<span class="access-name">' + escapeHtml(label) + '</span>';
+    for (const dir of DIRS) {
+      const control = controls.find((c) => c.id === 'access.' + name + '.' + dir);
+      const on = control && !!control.value;
+      const cell = document.createElement('button');
+      cell.className = 'access-cell' + (on ? ' on' : '');
+      cell.textContent = on ? '✕' : '';
+      cell.disabled = !control;
+      if (control) {
+        cell.title = control.help;
+        cell.onclick = () => applyEdits([{ id: control.id, value: !on }]);
+      }
+      row.appendChild(cell);
+    }
+    box.appendChild(row);
+  }
+  body.appendChild(box);
+}
+
+async function refreshPresets() {
+  const body = $('preset-modal-body');
+  if (!body) return;
+  body.innerHTML = '<p class="fineprint">Loading&hellip;</p>';
+  let payload;
+  try {
+    payload = await (await fetch('/api/presets')).json();
+  } catch (err) {
+    body.innerHTML = '<p class="fineprint">Could not load scenarios.</p>';
+    return;
+  }
+  body.innerHTML = '';
+  for (const preset of payload.presets || []) {
+    const row = document.createElement('div');
+    row.className = 'preset-row' + (preset.usable ? '' : ' broken');
+    row.innerHTML =
+      '<div class="preset-text">' +
+        '<span class="preset-label">' + escapeHtml(preset.label) +
+        (preset.exploratory ? '<span class="tag-exploratory">exploratory</span>' : '') +
+        '</span>' +
+        '<p class="fineprint">' + escapeHtml(preset.note) + '</p>' +
+        (preset.usable ? '' : '<p class="fineprint">Unavailable: this build ' +
+          'has no ' + escapeHtml((preset.missing_controls || []).join(', ')) +
+          '.</p>') +
+      '</div>' +
+      '<button class="ghost"' + (preset.usable ? '' : ' disabled') + '>Load</button>';
+    row.querySelector('button').onclick = async () => {
+      await fetch('/api/presets/' + encodeURIComponent(preset.id), { method: 'POST' });
+      const modal = $('preset-modal');
+      if (modal) modal.hidden = true;
+    };
+    body.appendChild(row);
+  }
 }
 
 function refreshTrafficModal(controls) {
@@ -513,6 +603,23 @@ function wireControlModals() {
     $('obstruction-modal').onclick = (e) => {
       if (e.target === $('obstruction-modal')) closeModal('obstruction-modal');
     };
+  }
+
+  for (const name of ['fleet', 'preset']) {
+    if ($('open-' + name + '-modal')) {
+      $('open-' + name + '-modal').onclick = () => {
+        if (name === 'preset') refreshPresets();
+        openModal(name + '-modal');
+      };
+    }
+    if ($('btn-close-' + name + '-modal')) {
+      $('btn-close-' + name + '-modal').onclick = () => closeModal(name + '-modal');
+    }
+    if ($(name + '-modal')) {
+      $(name + '-modal').onclick = (e) => {
+        if (e.target === $(name + '-modal')) closeModal(name + '-modal');
+      };
+    }
   }
 }
 
@@ -612,7 +719,8 @@ function buildObstructionPicker(body, controls) {
 
 function buildControl(control) {
   const el = document.createElement('div');
-  el.className = 'control ' + control.kind;
+  el.className = 'control ' + control.kind +
+    (control.exploratory ? ' exploratory' : '');
   el.id = 'ctl-' + cssId(control.id);
   el.title = control.help;
 

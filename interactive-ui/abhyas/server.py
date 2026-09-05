@@ -260,6 +260,15 @@ class SimWorker(threading.Thread):
             elif control["group"] == "Traffic":
                 spec, note = K.demand_edit(spec, control["id"], value)
                 demand_changed = True
+            elif control["group"] == "Access":
+                # both of these are baked into the route and vType files, same
+                # as demand is, so they restart the run rather than being
+                # nudged into a running one
+                spec, note = K.access_edit(spec, control["id"], value)
+                demand_changed = True
+            elif control["group"] == "Fleet":
+                spec, note = K.fleet_edit(spec, control["id"], value)
+                demand_changed = True
             else:
                 toggles.append((control["id"], int(value)))
             if note:
@@ -275,11 +284,17 @@ class SimWorker(threading.Thread):
         for control_id, wanted in toggles:
             self._set_obstruction_count(control_id, wanted)
 
+        if self.session.spec.is_exploratory:
+            notes.append(K.EXPLORATORY_NOTE)
+        for note in (getattr(self.session, "access", None) or {}).get("notes", []):
+            notes.append(note)
+
         changes = K.diff(before, self.state())
         self.bus.publish({"type": "controls", "surface": self.controls(),
                           "changes": changes,
                           "summary": K.describe_changes(changes),
                           "notes": notes, "restarted": demand_changed,
+                          "exploratory": self.session.spec.is_exploratory,
                           "origin": payload.get("origin", "dial")})
 
     def _set_obstruction_count(self, control_id, wanted):
@@ -589,6 +604,44 @@ async def interpret(body: Spoken):
     return JSONResponse(result)
 
 
+# ---- scenario presets ----------------------------------------------------
+
+@app.get("/api/presets")
+async def list_presets():
+    return JSONResponse(V.presets())
+
+
+@app.post("/api/presets/{preset_id}")
+async def apply_preset(preset_id: str):
+    """Load a named scenario. Same path a dial takes: every edit still goes
+    through the control surface, so a preset can't set something by hand that
+    the interface would refuse."""
+    stopped = _no_worker()
+    if stopped:
+        return stopped
+    try:
+        resolved = V.preset_edits(preset_id)
+    except KeyError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+    worker.send("apply_controls", {"edits": resolved["edits"],
+                                   "origin": "preset"})
+    return JSONResponse({"ok": True, "preset": resolved["preset"],
+                         "edits": len(resolved["edits"]),
+                         "note": resolved["preset"]["note"],
+                         "exploratory": resolved["preset"]["exploratory"]})
+
+
+@app.get("/api/scope")
+async def scope():
+    """What the vocabulary now covers and what it still refuses. Shrinking the
+    out-of-scope list deliberately means saying so, not going quiet."""
+    return JSONResponse({"actions": nlu.ACTIONS,
+                         "out_of_scope": nlu.OUT_OF_SCOPE,
+                         "changes": nlu.SCOPE_CHANGES,
+                         "exploratory_groups": sorted(K.EXPLORATORY_GROUPS),
+                         "exploratory_note": K.EXPLORATORY_NOTE})
+
+
 # ---- versions ------------------------------------------------------------
 
 class Commit(BaseModel):
@@ -713,11 +766,23 @@ def _counterfactual_job(params):
     veh_per_hour = params.get("veh_per_hour") or calibrated_veh_per_hour()
     spec = D.DemandSpec(veh_per_hour=float(veh_per_hour),
                         duration_s=float(params.get("duration_s") or 1800.0))
-    result = CF.run(delta_seconds=float(params.get("delta_seconds", 10.0)),
+
+    # A fleet or access scenario is compared against the same baseline the same
+    # way a signal change is: the levers named here move on the scenario side
+    # only, both sides run the same seeds, and the verdict is still allowed to
+    # come back "cannot resolve".
+    levers = {k: params[k] for k in D.DemandSpec.LEVERS if params.get(k)}
+    scenario_spec = spec.copy(**levers) if levers else None
+
+    # a signal counterfactual with no size named still means the old default;
+    # a fleet one means "change the traffic, leave the signal alone"
+    default_delta = 0.0 if levers else 10.0
+    result = CF.run(delta_seconds=float(params.get("delta_seconds",
+                                                   default_delta)),
                     phase_group=params.get("phase_group", "north_south"),
                     seeds=int(params.get("seeds") or 30),
                     workers=int(params.get("workers") or 4),
-                    spec=spec,
+                    spec=spec, scenario_spec=scenario_spec,
                     splits_sweep=bool(params.get("splits_sweep", True)),
                     progress=_progress("counterfactual"))
     bus.publish({"type": "job_finished", "job": "counterfactual",

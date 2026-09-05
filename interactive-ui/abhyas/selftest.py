@@ -145,6 +145,82 @@ def _routes():
     return str(info["routes"]) + " routes, " + str(info["flows"]) + " flows"
 
 
+@check("An access restriction withholds the demand it bans")
+def _access_restriction():
+    """A ban that quietly kept releasing the banned class would look exactly
+    like a ban that worked, right up until someone read the numbers."""
+    from . import demand as D
+    spec = D.DemandSpec(access_restrictions={"E": ["twowheeler"]})
+    info = D.prepare(spec)
+    text = C.ROUTES_FILE.read_text(encoding="utf-8")
+
+    require('type="twowheeler"' in text,
+            "no two-wheeler flows at all - the ban can't be tested against a "
+            "route file that never had any")
+    banned = [line for line in text.splitlines()
+              if 'route="r_E_' in line and 'type="twowheeler"' in line]
+    require(not banned, str(len(banned)) + " two-wheeler flow(s) still enter on "
+                        "the east approach after being banned from it")
+    survivors = [line for line in text.splitlines()
+                 if 'route="r_N_' in line and 'type="twowheeler"' in line]
+    require(survivors, "banning two-wheelers on E also removed them from N, "
+                       "which is a road closure and not an access restriction")
+    withheld = info["turned_away_veh_per_hour"]
+    require(withheld, "the ban withheld demand but reported none of it. Demand "
+                      "that vanishes without being counted is the failure mode "
+                      "this whole model is built to avoid.")
+
+    # and it has to be reversible - a ban that leaks into the next spec would
+    # quietly poison every run after it
+    clean = D.prepare(D.DemandSpec())
+    require(not clean["turned_away_veh_per_hour"],
+            "a later unrestricted run still turned demand away")
+    return ("east two-wheelers withheld ("
+            + ", ".join(k + " " + str(v) for k, v in sorted(withheld.items()))
+            + " veh/h), other arms untouched")
+
+
+@check("The fleet levers reach the simulator")
+def _fleet_levers():
+    """Same guard as the signal check below: move a lever hard and assert the
+    output actually moved. A dial that changes nothing is worse than no dial,
+    because it hands you a confident number for a scenario that never ran."""
+    from . import demand as D
+    from . import sim
+
+    plain = D.DemandSpec(veh_per_hour=1600, duration_s=600)
+    base = sim.run_once(plain, seed=4)
+    require(base.overall["person_throughput_per_hour"] > 0,
+            "nobody was moved at all - person throughput is not being counted")
+
+    # every heavy vehicle stops somewhere on its route
+    stopping = plain.copy(hmv_stop_rate=1.0)
+    stopped = sim.run_once(stopping, seed=4)
+    require(stopped.overall["hmv_self_stops"] > 0,
+            "at hmv_stop_rate=1.0 not one heavy vehicle stopped. The roll is "
+            "happening but the setStop isn't landing.")
+    require(base.overall["hmv_self_stops"] == 0,
+            "heavy vehicles stopped unscheduled at rate 0, so the baseline is "
+            "not the baseline")
+
+    # a bus carries about thirty times what a car does, so injecting buses has
+    # to move people much further than it moves vehicles
+    injected = plain.copy(injected={"bus": 300.0})
+    with_buses = sim.run_once(injected, seed=4)
+    veh_gain = (with_buses.overall["throughput_veh_per_hour"]
+                / max(base.overall["throughput_veh_per_hour"], 1.0))
+    people_gain = (with_buses.overall["person_throughput_per_hour"]
+                   / max(base.overall["person_throughput_per_hour"], 1.0))
+    require(people_gain > veh_gain,
+            "300 more buses an hour moved people by x" + format(people_gain, ".2f")
+            + " and vehicles by x" + format(veh_gain, ".2f")
+            + ". Occupancy isn't reaching the throughput figure, which is the "
+              "one number the whole transit argument rests on.")
+    return (str(stopped.overall["hmv_self_stops"]) + " self-triggered stops; "
+            "injecting buses moved people x" + format(people_gain, ".2f")
+            + " against vehicles x" + format(veh_gain, ".2f"))
+
+
 @check("The archive loads and yields a target with a spread")
 def _archive():
     from . import archive as A

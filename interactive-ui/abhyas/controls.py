@@ -10,7 +10,16 @@ from . import tls as T
 MIN_GREEN_S = T.MIN_GREEN_S
 MAX_GREEN_S = T.MAX_GREEN_S
 
-GROUPS = ["Signal", "Traffic", "Obstructions"]
+GROUPS = ["Signal", "Traffic", "Access", "Fleet", "Obstructions"]
+
+# Groups whose controls are NOT part of the calibrated model. Everything in
+# them is a declared prior that gets swept, never a fitted parameter, and the
+# surface says so on every control rather than leaving it to be remembered.
+EXPLORATORY_GROUPS = {"Access", "Fleet"}
+
+EXPLORATORY_NOTE = ("Exploratory: swept, not fitted. Nothing in the validation "
+                    "archive constrains this dial, so read it as a comparison "
+                    "against baseline and never as a validated number.")
 
 
 class Rejected(Exception):
@@ -18,9 +27,13 @@ class Rejected(Exception):
 
 
 def _dial(cid, label, group, minimum, maximum, step, unit, help_text, kind="dial"):
-    return {"id": cid, "label": label, "group": group, "kind": kind,
-            "value": None, "min": minimum, "max": maximum, "step": step,
-            "unit": unit, "help": help_text}
+    control = {"id": cid, "label": label, "group": group, "kind": kind,
+               "value": None, "min": minimum, "max": maximum, "step": step,
+               "unit": unit, "help": help_text,
+               "exploratory": group in EXPLORATORY_GROUPS}
+    if control["exploratory"]:
+        control["help"] = help_text + " " + EXPLORATORY_NOTE
+    return control
 
 
 def declare(shape=None):
@@ -80,6 +93,67 @@ def declare(shape=None):
             "measurement - nothing we counted distinguishes the three.",
             kind="slider"))
 
+    # -- Access: who is allowed onto which approach ------------------------
+    for name, vspec in D.VEHICLE_CLASSES.items():
+        for arm in "NSEW":
+            controls.append(_dial(
+                "access." + name + "." + arm,
+                "No " + D.plural(name) + " on " + arm, "Access",
+                0, 1, 1, "",
+                "Ban " + D.plural(name) + " from entering on the "
+                + arm + " approach. This junction is the whole model, so that "
+                "demand has no other arm to arrive on: it is turned away and "
+                "reported, not silently re-routed.",
+                kind="toggle"))
+
+    # -- Fleet: what is in the traffic, and how it drives ------------------
+    controls.append(_dial(
+        "fleet.hcv_share", "Truck / HCV share", "Fleet", 0.0, 0.20, 0.01, "",
+        "Share of the flow that is a heavy goods vehicle, taken proportionally "
+        "off the other classes. The default ("
+        + format(D.VEHICLE_CLASSES["hcv"]["share"], ".2f") + ") is a declared "
+        "prior, not a count: no HMV composition figure for this corridor has "
+        "been read in, so every number under it - including the baseline - is "
+        "waiting on a re-run of the calibration against a mix that contains "
+        "trucks."))
+
+    controls.append(_dial(
+        "fleet.hmv_discipline", "HMV driving discipline", "Fleet",
+        0.0, 1.0, 0.05, "",
+        "How buses and trucks take gaps: 0 waits for one, 1 takes one and "
+        "expects to be let in. Moves lcPushy, lcAssertive, jmTimegapMinor and "
+        "impatience on the heavy classes only - dimensions stay where "
+        "Indo-HCM put them. This is the dial behind 'HMVs incite the traffic': "
+        "same demand, same signal, only the conduct changes."))
+
+    controls.append(_dial(
+        "fleet.hmv_stop_rate", "HMVs stopping unscheduled", "Fleet",
+        0.0, 1.0, 0.05, "",
+        "Fraction of buses and trucks that stop mid-route in a live lane - a "
+        "bus loading, a truck parked half in. Rolled per vehicle as it "
+        "departs, so the obstruction comes from the flow rather than from "
+        "someone placing it."))
+
+    for name, vspec in D.VEHICLE_CLASSES.items():
+        controls.append(_dial(
+            "fleet.injected." + name, D.plural(name).capitalize() + " added",
+            "Fleet", 0.0, 1200.0, 10.0, "veh/h",
+            "Extra " + D.plural(name) + " per hour added on TOP of the "
+            "calibrated flow, not sliced out of it - which is what a scheme "
+            "that buys vehicles actually does. At one junction this says what "
+            "N more per hour do to these queues, not what a city-wide scheme "
+            "does."))
+
+    controls.append(_dial(
+        "fleet.mode_shift", "Shift to public transit", "Fleet", 0.0, 0.50, 0.05,
+        "",
+        "Fraction of car and two-wheeler trips replaced by bus trips at the "
+        "declared occupancies (car "
+        + format(D.occupancy("car"), ".1f") + ", two-wheeler "
+        + format(D.occupancy("twowheeler"), ".1f") + ", bus "
+        + format(D.occupancy("bus"), ".0f") + " people). Autos are left alone: "
+        "an auto trip is already a hired trip."))
+
     for kind, spec in sim.OBSTRUCTION_TYPES.items():
         for arm in "NSEW":
             controls.append(_dial(
@@ -137,11 +211,28 @@ def surface(plan, spec, obstructions=None):
             entry["value"] = float(spec.arm_share.get(parts[2], 0.0))
         elif parts[0] == "demand" and parts[1] == "turning_splits":
             entry["value"] = float(spec.turning_splits.get(parts[2], 0.0))
+        elif parts[0] == "access":
+            entry["value"] = parts[1] in spec.restricted_on(parts[2])
+        elif control["id"] == "fleet.hcv_share":
+            entry["value"] = float(spec.hcv_share
+                                   if spec.hcv_share is not None
+                                   else D.VEHICLE_CLASSES["hcv"]["share"])
+        elif control["id"] == "fleet.hmv_discipline":
+            entry["value"] = float(spec.hmv_discipline)
+        elif control["id"] == "fleet.hmv_stop_rate":
+            entry["value"] = float(spec.hmv_stop_rate)
+        elif control["id"] == "fleet.mode_shift":
+            entry["value"] = float(spec.mode_shift)
+        elif parts[0] == "fleet" and parts[1] == "injected":
+            entry["value"] = float(spec.injected.get(parts[2], 0.0))
         elif parts[0] == "obstruction":
             entry["value"] = placed_counts.get((parts[1], parts[2]), 0)
         controls.append(entry)
 
     return {"controls": controls, "groups": GROUPS,
+            "exploratory_groups": sorted(EXPLORATORY_GROUPS),
+            "exploratory_note": EXPLORATORY_NOTE,
+            "exploratory": bool(spec.is_exploratory),
             "cycle_seconds": T.cycle_seconds(plan), "shape": shape,
             "shape_label": C.PHASE_PLANS[shape]["label"],
             "shape_note": C.PHASE_PLANS[shape]["note"],
@@ -161,8 +252,19 @@ def baseline_state(shape=None):
         state["demand.arm_share." + arm] = float(share)
     for turn, share in spec.turning_splits.items():
         state["demand.turning_splits." + turn] = float(share)
+    # baseline is every scenario lever at its neutral value: no ban, no
+    # injected fleet, no mode shift, no HCVs, heavy vehicles driving the way
+    # Indo-HCM describes them. That is the model the archive validated.
     for control in declare(shape):
-        default = 0 if control["group"] == "Obstructions" else False
+        if control["group"] == "Obstructions":
+            default = 0
+        elif control["kind"] == "toggle":
+            default = False
+        elif control["group"] == "Fleet":
+            default = float(D.VEHICLE_CLASSES["hcv"]["share"]) \
+                if control["id"] == "fleet.hcv_share" else 0.0
+        else:
+            default = False
         state.setdefault(control["id"], default)
     return state
 
@@ -225,6 +327,78 @@ def demand_edit(spec, control_id, value):
     return out, (note + "; " + renormalised) if note else renormalised
 
 
+def access_edit(spec, control_id, value):
+    """Ban or unban one vehicle class on one approach."""
+    _, class_name, arm = control_id.split(".")
+    if class_name not in D.VEHICLE_CLASSES:
+        raise Rejected("No vehicle class called '" + class_name + "'.")
+    out = spec.copy()
+    banned = {a: list(c) for a, c in out.access_restrictions.items()}
+    here = set(banned.get(arm, ()))
+    on = bool(value) and str(value).lower() not in ("0", "false", "off")
+    here.add(class_name) if on else here.discard(class_name)
+    if here:
+        banned[arm] = sorted(here)
+    else:
+        banned.pop(arm, None)
+    out.access_restrictions = banned
+
+    if not on:
+        return out, ""
+    if set(D.VEHICLE_CLASSES) - here == set():
+        raise Rejected("That would ban every vehicle class from the " + arm
+                       + " approach, which is a road closure and not an access "
+                         "restriction. Close the arm with roadworks instead.")
+    return out, (D.VEHICLE_CLASSES[class_name]["label"] + "s are turned away on "
+                 + arm + " rather than re-routed - one junction has no other "
+                 "arm for them to arrive on")
+
+
+def fleet_edit(spec, control_id, value):
+    """The fleet levers. Every one of these is exploratory."""
+    control = lookup(control_id)
+    clamped, note = clamp(control, value)
+    out = spec.copy()
+    parts = control_id.split(".")
+
+    if control_id == "fleet.hcv_share":
+        out.hcv_share = clamped
+        share_note = ("HCV share is a declared figure, not a counted one: "
+                      "nothing in the archive says how many trucks use this "
+                      "corridor") if clamped else ""
+    elif control_id == "fleet.hmv_discipline":
+        out.hmv_discipline = clamped
+        share_note = ("Driving discipline is new behavioural ground, not a "
+                      "citation. Show it as a paired before/after, not as a "
+                      "level") if clamped else ""
+    elif control_id == "fleet.hmv_stop_rate":
+        out.hmv_stop_rate = clamped
+        share_note = ""
+    elif control_id == "fleet.mode_shift":
+        out.mode_shift = clamped
+        share_note = ("Mode shift rests on the declared occupancies, which are "
+                      "a prior. It is a statement about this junction, not "
+                      "about the corridor") if clamped else ""
+    elif parts[1] == "injected":
+        name = parts[2]
+        if name not in D.VEHICLE_CLASSES:
+            raise Rejected("No vehicle class called '" + name + "'.")
+        injected = dict(out.injected)
+        if clamped:
+            injected[name] = clamped
+        else:
+            injected.pop(name, None)
+        out.injected = injected
+        share_note = ("Added on top of the calibrated flow. At one junction "
+                      "this is what those vehicles do to these queues, not "
+                      "what a scheme does city-wide") if clamped else ""
+    else:
+        raise Rejected("No fleet control called '" + control_id + "'.")
+
+    parts_note = [p for p in (note, share_note) if p]
+    return out, "; ".join(parts_note)
+
+
 def diff(before, after):
     labels = all_controls()
     changes = []
@@ -251,6 +425,12 @@ def _change_phrase(change):
         unit = " " + change["unit"] if change["unit"] else ""
         return change["label"] + " added at " + fmt(change["to"]) + unit
     if isinstance(change["to"], bool):
+        if change["id"].startswith("access."):
+            _, class_name, arm = change["id"].split(".")
+            label = D.plural(class_name)
+            return (label + " " + ("banned from" if change["to"]
+                                    else "allowed back onto") + " the " + arm
+                    + " approach")
         return change["label"] + (" placed" if change["to"] else " removed")
     if change["delta"]:
         sign = "+" if change["delta"] > 0 else ""

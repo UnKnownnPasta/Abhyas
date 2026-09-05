@@ -46,6 +46,12 @@ OBSTRUCTION_JITTER_M = 20.0
 # most obstructions one arm can carry at once - a dial, not a toggle.
 OBSTRUCTION_MAX_PER_ARM = 4
 
+# A self-triggered stop goes somewhere in the middle of the vehicle's route,
+# not at the stop line: a bus loading passengers or a truck backing into a
+# shop does it where the shop is, and where the queue already stands nothing
+# it does makes any difference.
+HMV_STOP_MARGIN_M = 8.0
+
 _obstruction_seq = itertools.count()
 
 
@@ -245,10 +251,54 @@ def apply_plan(model, plan, conn=traci):
     conn.trafficlight.setProgram(C.JUNCTION_ID, "abhyas")
 
 
+def apply_access_restrictions(model, spec, conn=traci):
+    """Ban vehicle classes from an approach at the lane level.
+
+    A ban, not a closure: the lane stays in the network and everything else
+    keeps using it. demand.write_routes has already stopped releasing the
+    banned class on that arm - this is what stops anything else reaching it,
+    and what makes the restriction visible in the GUI.
+
+    Two classes share the 'passenger' vClass (car and auto-rickshaw), and SUMO
+    bans by vClass, so banning one at lane level would ban the other. Those are
+    left to the flow drop alone and the caller is told so rather than being
+    handed a ban that quietly took a second class off the road with it.
+    """
+    notes, applied = [], []
+    for arm, classes in (spec.access_restrictions or {}).items():
+        if arm not in model.arms:
+            continue
+        shared = {c: D.VEHICLE_CLASSES[c]["vClass"] for c in classes
+                  if c in D.VEHICLE_CLASSES}
+        for name, vclass in shared.items():
+            others = [n for n, s in D.VEHICLE_CLASSES.items()
+                      if s["vClass"] == vclass and n != name]
+            if others:
+                notes.append(
+                    D.VEHICLE_CLASSES[name]["label"] + " on the " + arm
+                    + " approach shares SUMO's '" + vclass + "' class with "
+                    + ", ".join(D.VEHICLE_CLASSES[n]["label"] for n in others)
+                    + ", so the ban is enforced by withholding the demand, not "
+                      "by closing the lane to that class.")
+                continue
+            for edge_id in model.arms[arm].approach_edges:
+                edge = model.net.getEdge(edge_id)
+                for lane in edge.getLanes():
+                    current = set(lane.getPermissions() or ())
+                    try:
+                        conn.lane.setDisallowed(lane.getID(), [vclass])
+                    except traci.TraCIException:
+                        continue
+                    applied.append({"arm": arm, "class": name,
+                                    "lane": lane.getID(), "vClass": vclass,
+                                    "allowed_before": sorted(current)})
+    return {"applied": applied, "notes": notes}
+
+
 class Collector:
     """Accumulates the same quantities the archive reports."""
 
-    def __init__(self, model, warmup_s, measure_until_s=float("inf")):
+    def __init__(self, model, warmup_s, measure_until_s=float("inf"), spec=None):
         self.model = model
         self.warmup_s = warmup_s
         # A batch run keeps stepping for ten minutes after the flows stop so
@@ -257,7 +307,18 @@ class Collector:
         # vehicles entering the window after demand ended get timed but not
         # counted.
         self.measure_until_s = measure_until_s
+        # the spec is here for the fleet levers only - what fraction of heavy
+        # vehicles stop unscheduled, and how many people each class carries.
+        self.spec = spec or D.DemandSpec()
+        # own stream, seeded off the run's seed, so rolling for a bus stop
+        # can't shift the sequence SUMO draws from and un-pair the seeds
+        self.rng = random.Random("hmv-stops-" + str(self.spec.seed))
         self.route_of = {}
+        self.class_of = {}       # vid -> vehicle class, for person throughput
+        self.arrived_by_class = {}
+        self.hmv_stops = []      # every self-triggered stop, not a count
+        self.hmv_stop_rolls = 0          # how many came up for a stop
+        self.hmv_stops_unplaced = 0      # and how many found nowhere to take it
         self.tracked = {}        # vid -> [movement, entered_at or None]
         self.durations = {m: [] for m in model.movement_route}
         self.arrived = {arm: 0 for arm in "NESW"}
@@ -289,13 +350,69 @@ class Collector:
             self.loaded += 1
             try:
                 route = conn.vehicle.getRouteID(vid)
+                self.class_of[vid] = conn.vehicle.getTypeID(vid)
             except traci.TraCIException:
                 continue
             self.route_of[vid] = route
+            self._maybe_stop(vid, conn)
             movement = self._route_to_movement.get(route)
             if movement is not None and movement in self.model.gate:
                 self.tracked[vid] = [movement, None]
                 conn.vehicle.subscribe(vid, (traci.constants.VAR_DISTANCE,))
+
+    def _maybe_stop(self, vid, conn):
+        """Roll for a bus that stops to load, or a truck that parks half in.
+
+        Same TraCI call the cow and the roadworks already use. What's different
+        is who triggers it: this is one of the flow's own vehicles stopping
+        unscheduled, not an obstruction somebody placed, which is the thing
+        the feedback was actually asking to see.
+        """
+        rate = self.spec.hmv_stop_rate
+        vclass = self.class_of.get(vid)
+        spec = D.VEHICLE_CLASSES.get(vclass, {})
+        if not rate or not spec.get("heavy"):
+            return
+        if self.rng.random() >= rate:
+            return
+        try:
+            edges = list(conn.vehicle.getRoute(vid))
+        except traci.TraCIException:
+            return
+        # never the edge it's departing on and never the one it leaves by: a
+        # stop at either end is an insertion failure or an exit, not a stop
+        self.hmv_stop_rolls += 1
+        candidates = edges[1:-1] or edges[1:]
+        # try them all, shortest-first failures and TraCI refusals included:
+        # taking the first pick and giving up turned a declared rate of 1.0
+        # into a realised rate of about 0.3, which is a dial that lies
+        self.rng.shuffle(candidates)
+        for edge_id in candidates:
+            try:
+                edge = self.model.net.getEdge(edge_id)
+            except KeyError:
+                continue
+            length = edge.getLength()
+            if length < 2 * HMV_STOP_MARGIN_M:
+                continue
+            position = self.rng.uniform(HMV_STOP_MARGIN_M,
+                                        length - HMV_STOP_MARGIN_M)
+            lane_index = self.rng.randrange(edge.getLaneNumber())
+            low, high = spec.get("stop_duration_s", (15.0, 60.0))
+            duration = self.rng.uniform(low, high)
+            try:
+                # no parking flag: it stops IN the lane, which is the point
+                conn.vehicle.setStop(vid, edge_id, pos=position,
+                                     laneIndex=lane_index, duration=duration)
+            except traci.TraCIException:
+                continue
+            self.hmv_stops.append({"vehicle": vid, "class": vclass,
+                                   "edge": edge_id, "lane": lane_index,
+                                   "position_m": round(position, 1),
+                                   "duration_s": round(duration, 1)})
+            return
+        # nowhere on this vehicle's route was long enough to stop in
+        self.hmv_stops_unplaced += 1
 
     def _time_tracked(self, now, conn):
         """Time each tracked vehicle between the archive's two points."""
@@ -323,6 +440,10 @@ class Collector:
     def _on_arrived(self, conn):
         for vid in conn.simulation.getArrivedIDList():
             route = self.route_of.pop(vid, None)
+            vclass = self.class_of.pop(vid, None)
+            if vclass in D.VEHICLE_CLASSES:
+                self.arrived_by_class[vclass] = \
+                    self.arrived_by_class.get(vclass, 0) + 1
             if vid in self.tracked:
                 # left without finishing the measured window - teleported or
                 # removed. counted, never guessed at.
@@ -343,12 +464,30 @@ class Collector:
 
         all_queue = [q for arm in "NESW" for q in self.queue_samples[arm]]
         completed = sum(self.arrived.values())
+        # A scheme's whole case is that a bus carries 40 people and a car
+        # carries 1.2. Counting vehicles alone cannot express that, so the
+        # same completions are also reported as people - on declared
+        # occupancies, which are a prior and not a measurement.
+        people = sum(count * D.occupancy(name)
+                     for name, count in self.arrived_by_class.items())
         overall = {
             "vehicles_loaded": self.loaded,
             "vehicles_completed": completed,
             "teleported": self.teleported,
             "queue_mean_veh": round(statistics.fmean(all_queue), 2) if all_queue else 0.0,
             "throughput_veh_per_hour": round(completed * 3600.0 / measured_s, 1),
+            "person_throughput_per_hour": round(people * 3600.0 / measured_s, 1),
+            "people_completed": round(people, 1),
+            "vehicles_by_class": dict(self.arrived_by_class),
+            "modal_split": {name: round(count / completed, 4)
+                            for name, count in self.arrived_by_class.items()}
+                           if completed else {},
+            "person_modal_split": {
+                name: round(count * D.occupancy(name) / people, 4)
+                for name, count in self.arrived_by_class.items()} if people else {},
+            "hmv_self_stops": len(self.hmv_stops),
+            "hmv_stops_rolled": self.hmv_stop_rolls,
+            "hmv_stops_unplaced": self.hmv_stops_unplaced,
             "gridlocked": self.teleported > max(10, 0.05 * max(self.loaded, 1)),
         }
         return RunResult(seed, movements, approaches, overall, T.describe(plan),
@@ -384,6 +523,35 @@ class Collector:
 
     def _warnings(self, movements):
         warnings = list(self.model.movement_warnings)
+        if self.spec.is_exploratory:
+            warnings.append(
+                "This run moved a fleet or access lever, so it is exploratory: "
+                "those levers are declared and swept, not fitted, and nothing "
+                "in the validation archive constrains them. Compare it against "
+                "a baseline, don't quote it on its own.")
+        if self.hmv_stop_rolls:
+            realised = len(self.hmv_stops) / self.hmv_stop_rolls
+            warnings.append(
+                str(len(self.hmv_stops)) + " heavy vehicle(s) stopped "
+                "unscheduled mid-route (buses loading, trucks parked half in a "
+                "lane). Rolled at hmv_stop_rate="
+                + format(self.spec.hmv_stop_rate, ".2f") + ", which is a "
+                "declared rate, not a counted one.")
+            if self.hmv_stops_unplaced:
+                warnings.append(
+                    str(self.hmv_stops_unplaced) + " of " +
+                    str(self.hmv_stop_rolls) + " rolled stops found no stretch "
+                    "of road long enough to take one, so the realised rate is "
+                    + format(self.spec.hmv_stop_rate * realised, ".2f")
+                    + " and not " + format(self.spec.hmv_stop_rate, ".2f")
+                    + ". The dial is the ask; this is what the network allowed.")
+        if any(self.arrived_by_class.get(c) for c in D.HEAVY_CLASSES) or \
+                self.spec.injected or self.spec.mode_shift:
+            warnings.append(
+                "Person throughput uses the declared occupancies in "
+                "demand.VEHICLE_CLASSES. They are a prior. A different "
+                "occupancy per bus moves that number without anything on the "
+                "road changing.")
         if self.abandoned:
             warnings.append(str(self.abandoned) + " vehicle(s) left the network "
                             "without finishing the measured window, excluded "
@@ -417,10 +585,12 @@ def run_once(spec=None, plan=None, seed=1, warmup_s=WARMUP_S, obstructions=None)
     conn = traci.getConnection(label)
     try:
         apply_plan(model, plan, conn)
+        apply_access_restrictions(model, spec, conn)
         for obstruction in (obstructions or []):
             place_obstruction(model, obstruction, conn=conn, now=0.0)
 
-        collector = Collector(model, warmup_s, measure_until_s=spec.duration_s)
+        collector = Collector(model, warmup_s, measure_until_s=spec.duration_s,
+                              spec=spec)
         now = 0.0
         end = spec.duration_s + 600.0        # let the stragglers clear
         while now < end and conn.simulation.getMinExpectedNumber() > 0:
@@ -549,7 +719,9 @@ def network_geometry():
         "arms": arms,
         "vehicle_classes": {name: {"label": s["label"], "colour": s["colour"],
                                    "length": s["length"], "width": s["width"],
-                                   "height": s["height"]}
+                                   "height": s["height"],
+                                   "occupancy": s.get("occupancy", 1.0),
+                                   "heavy": bool(s.get("heavy"))}
                             for name, s in D.VEHICLE_CLASSES.items()},
     }
 
@@ -571,6 +743,7 @@ class LiveSession:
         self.model = None
         self.collector = None
         self.obstructions = []
+        self.access = {"applied": [], "notes": []}
         self.time = 0.0
         self.running = False
 
@@ -581,7 +754,8 @@ class LiveSession:
         traci.start(_sumo_command(self.gui, self.seed), label=self.label)
         self.conn = traci.getConnection(self.label)
         apply_plan(self.model, self.plan, self.conn)
-        self.collector = Collector(self.model, warmup_s=0.0)
+        self.access = apply_access_restrictions(self.model, self.spec, self.conn)
+        self.collector = Collector(self.model, warmup_s=0.0, spec=self.spec)
         self.running = True
 
     def step(self):
@@ -681,6 +855,8 @@ class LiveSession:
                                 for e in self.model.queue_edges[arm])
                        for arm in "NESW"},
             "obstructions": self.obstructions,
+            "hmv_stops": self.collector.hmv_stops[-20:],
+            "access": self.access,
             "plan": T.describe(self.plan),
             "demand": self.spec.to_dict(),
         }

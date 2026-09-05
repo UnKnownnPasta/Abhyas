@@ -15,6 +15,89 @@ STORE = C.RESULTS / "versions.json"
 MAX_VERSIONS = 200
 PROJECT = "Indiranagar CMH"
 
+# Named starting points, so a demo is one click and not six dials set by hand
+# while everyone watches. A preset is a set of control edits and nothing more -
+# it goes through K.lookup and the same clamp every dial does, and the caution
+# rides along with it so the label can't travel without the caveat.
+PRESETS = [
+    {"id": "baseline", "label": "Calibrated baseline",
+     "note": "Every scenario lever at its neutral value. The model the "
+             "archive was validated against.",
+     "exploratory": False, "edits": []},
+    {"id": "ban_2w_east", "label": "No two-wheelers on CMH east",
+     "note": "Access restriction on one arm. That demand is turned away and "
+             "counted, because one junction has no other arm for it to "
+             "arrive on.",
+     "exploratory": True,
+     "edits": [{"id": "access.twowheeler.E", "value": True}]},
+    {"id": "ebus_240", "label": "240 more buses an hour",
+     "note": "Added on top of the calibrated flow, the way buying vehicles "
+             "works. Says what those buses do to THIS junction, not what a "
+             "6,000-bus scheme does to the city. 'Electric' is not modelled.",
+     "exploratory": True,
+     "edits": [{"id": "fleet.injected.bus", "value": 240.0}]},
+    {"id": "shift_20", "label": "20% shift to transit",
+     "note": "A fifth of car and two-wheeler trips replaced by bus trips at "
+             "declared occupancies. Read the people-moved line, not just the "
+             "vehicle count.",
+     "exploratory": True,
+     "edits": [{"id": "fleet.mode_shift", "value": 0.20}]},
+    {"id": "hmv_uncontrolled", "label": "Heavy vehicles, uncontrolled",
+     "note": "Same demand, same signal, only the conduct changes - which is "
+             "the whole argument. New behavioural ground, not a citation: run "
+             "it against baseline and quote the pair.",
+     "exploratory": True,
+     "edits": [{"id": "fleet.hmv_discipline", "value": 1.0},
+               {"id": "fleet.hmv_stop_rate", "value": 0.25}]},
+]
+
+
+def presets():
+    """The library, with each preset's edits checked against the live control
+    surface. A preset that names a control this build doesn't have is reported
+    as broken rather than half-applied."""
+    known = K.all_controls()
+    out = []
+    for preset in PRESETS:
+        missing = [e["id"] for e in preset["edits"] if e["id"] not in known]
+        entry = dict(preset)
+        entry["missing_controls"] = missing
+        entry["usable"] = not missing
+        out.append(entry)
+    return {"presets": out, "exploratory_note": K.EXPLORATORY_NOTE}
+
+
+def preset(preset_id):
+    for entry in presets()["presets"]:
+        if entry["id"] == preset_id:
+            if not entry["usable"]:
+                raise KeyError("Preset '" + preset_id + "' names controls this "
+                               "build doesn't have: "
+                               + ", ".join(entry["missing_controls"]))
+            return entry
+    raise KeyError("No preset called '" + str(preset_id) + "'")
+
+
+def preset_edits(preset_id):
+    """A preset is a state, not a nudge.
+
+    Every exploratory control goes back to its baseline value first, so
+    clicking two presets in a row gives you the second one and not both at
+    once. Signal and demand are left alone: a preset says what is on the road,
+    it doesn't quietly retime the junction under you.
+    """
+    entry = preset(preset_id)
+    baseline = K.baseline_state()
+    edits = [{"id": cid, "value": baseline[cid]}
+             for cid, control in sorted(K.all_controls().items())
+             if control["group"] in K.EXPLORATORY_GROUPS and cid in baseline]
+    wanted = {e["id"]: e["value"] for e in entry["edits"]}
+    for edit in edits:
+        if edit["id"] in wanted:
+            edit["value"] = wanted.pop(edit["id"])
+    edits.extend({"id": cid, "value": value} for cid, value in wanted.items())
+    return {"preset": entry, "edits": edits}
+
 
 def now():
     return time.strftime("%Y-%m-%dT%H:%M:%S")

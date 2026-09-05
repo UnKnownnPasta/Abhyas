@@ -29,6 +29,7 @@ const VEHICLE_MODELS = {
   auto:       { dir: 'auto_rickshaw', yaw: -90 },
   car:        { dir: 'low_poly_car', fit: 'stretch' },
   bus:        { dir: 'bus' },
+  hcv:        { dir: 'truck' },
 
   obstruction_cow:             { dir: 'cow', size: [2.2, 1.0, 1.4] },
   obstruction_stalled_vehicle: { dir: 'stalled_vehicle', size: [4.2, 1.8, 1.5] },

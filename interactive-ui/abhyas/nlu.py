@@ -18,6 +18,10 @@ ACTIONS = {
     "adjust_green": "Add or remove green time on one signal phase",
     "set_green": "Set the green time of one signal phase outright",
     "set_demand": "Change how many vehicles per hour enter the junction",
+    "restrict_access": "Ban one vehicle class from one approach",
+    "inject_fleet": "Add vehicles of one class on top of the current flow",
+    "set_mode_shift": "Move a share of car and two-wheeler trips onto buses",
+    "set_hmv_discipline": "Change how assertively buses and trucks take gaps",
     "add_obstruction": "Put an obstruction in one approach lane",
     "clear_obstructions": "Remove every obstruction from the road",
     "run_counterfactual": "Compare a signal change against baseline on paired seeds",
@@ -58,6 +62,22 @@ _PHASE_WORDS_BY_SHAPE = {
 
 PHASE_WORDS = _PHASE_WORDS_BY_SHAPE[C.ACTIVE_PHASE_PLAN]
 
+# The words that name a vehicle class. Keyed to demand.VEHICLE_CLASSES so a
+# class added there can't be one the interface refuses to talk about.
+CLASS_WORDS = {
+    "twowheeler": ["two-wheeler", "two wheeler", "twowheeler", "2w", "bike",
+                   "bikes", "motorcycle", "motorbike", "scooter", "scooters"],
+    "auto": ["auto", "autos", "auto-rickshaw", "auto rickshaw", "rickshaw",
+             "three wheeler", "three-wheeler"],
+    "car": ["car", "cars", "private car", "private vehicle"],
+    "bus": ["bus", "buses", "e-bus", "e-buses", "electric bus",
+            "electric buses", "bmtc", "public transport", "public transit",
+            "transit"],
+    "hcv": ["truck", "trucks", "lorry", "lorries", "hcv", "hgv", "hmv",
+            "heavy vehicle", "heavy vehicles", "heavy goods", "goods vehicle",
+            "tempo"],
+}
+
 OBSTRUCTION_WORDS = {
     "cow": ["cow", "cattle", "bull", "buffalo", "animal", "ox"],
     "stalled_vehicle": ["stalled", "broken down", "breakdown", "stalled vehicle",
@@ -86,9 +106,43 @@ OUT_OF_SCOPE = {
     "adaptive": "The signal is a fixed-time plan. Adaptive control isn't "
                 "implemented and claiming a result for it would be inventing one.",
     "another junction": "Only CMH Road x 100 Feet Road is modelled.",
-    "whole city": "Only one junction is modelled. A city-wide answer would be "
-                  "an extrapolation, not a result.",
+    "whole city": "Only one junction is modelled. A fleet or transit scenario "
+                  "can be run here - it says what those vehicles do to THIS "
+                  "junction's queues - but a city-wide answer would be an "
+                  "extrapolation, not a result.",
 }
+
+# Kept as a list rather than deleted, because when this vocabulary grows the
+# thing that must not happen is a rejection quietly turning into a guess. Each
+# entry says what became possible and what stayed out.
+SCOPE_CHANGES = [
+    {"was": "Vehicle-class access restrictions",
+     "now": "in scope",
+     "note": "An arm can be closed to one vehicle class. The demand that would "
+             "have used it is turned away and reported, because one junction "
+             "has no other arm for it to arrive on."},
+    {"was": "Fleet schemes and mode shift",
+     "now": "in scope at one junction, exploratory",
+     "note": "Vehicles can be added on top of the calibrated flow, and car / "
+             "two-wheeler trips can be moved onto buses at declared "
+             "occupancies. The result is about this junction's queues, not "
+             "about what a scheme does to the city."},
+    {"was": "Heavy vehicles",
+     "now": "in scope, exploratory",
+     "note": "There is an HCV class with Indo-HCM dimensions, a discipline "
+             "dial for how assertively heavy vehicles take gaps, and a rate "
+             "at which they stop unscheduled in a live lane. The dial and the "
+             "rate are new behavioural ground, not citations."},
+    {"was": "Emissions",
+     "now": "still out of scope",
+     "note": "An electric-bus scheme is at bottom an emissions argument and "
+             "this model still cannot make it. What it can show is what those "
+             "buses do to queues, travel time and people moved."},
+    {"was": "Corridor and network effects",
+     "now": "still out of scope",
+     "note": "One junction cannot answer what happens two signals away. That "
+             "needs the wider network routed and its own ground truth."},
+]
 
 NUMBER_WORDS = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -117,6 +171,13 @@ class Instruction:
                 "reason": self.reason, "utterance": self.utterance,
                 "source": self.source, "summary": self.summary,
                 "vocabulary": sorted(ACTIONS)}
+
+
+def _class_plural(name):
+    """Reads the vocabulary off demand.py rather than repeating it. Imported
+    here and not at module scope: nlu must stay importable without SUMO."""
+    from . import demand as D
+    return D.plural(name)
 
 
 def reject(utterance, reason, notes=None):
@@ -214,8 +275,10 @@ class Parser:
                 return reject(self.raw, explanation,
                               notes=["Available actions: " + ", ".join(sorted(ACTIONS))])
 
-        for handler in (self.validation, self.counterfactual, self.obstruction,
-                        self.clear, self.demand, self.signal, self.control):
+        for handler in (self.validation, self.access, self.fleet,
+                        self.mode_shift, self.discipline, self.counterfactual,
+                        self.obstruction, self.clear, self.demand, self.signal,
+                        self.control):
             instruction = handler()
             if instruction is not None:
                 return instruction
@@ -249,6 +312,167 @@ class Parser:
             summary=("Run the validation fleet"
                      + (" for " + slot if slot else " on the latest usable slot")
                      + " with " + str(params["seeds"]) + " seeds per movement"))
+
+    # -- the fleet and access handlers -------------------------------------
+
+    def find_class(self):
+        """The vehicle class the text names, longest match first so 'electric
+        bus' beats 'bus' and 'heavy vehicle' beats nothing."""
+        hits = []
+        for name, words in CLASS_WORDS.items():
+            for word in words:
+                # trailing "s" allowed here rather than listing every plural
+                # twice: "no two-wheelers" is how people actually say it
+                if re.search(r"(?<![a-z])" + re.escape(word) + r"s?(?![a-z])",
+                             self.text):
+                    hits.append((name, len(word)))
+                    break
+        hits.sort(key=lambda h: -h[1])
+        return hits[0][0] if hits else None
+
+    ELECTRIC_NOTE = ("'Electric' is not modelled. Emissions were never "
+                     "validated against anything, so this runs the buses and "
+                     "reports queues, travel time and people moved - it says "
+                     "nothing about what comes out of the tailpipe.")
+
+    def access(self):
+        """'No two-wheelers on this road.'"""
+        if not (self.has(r"\b(ban|banned|no|not allowed|prohibit|forbid|"
+                         r"restrict|barred?|off limits|allow)\b")
+                or self.has(r"\bkeep\b.{0,30}\b(out|off|away)\b")):
+            return None
+        class_name = self.find_class()
+        if class_name is None:
+            return None
+        # "no more buses" is a fleet ask, not an access one
+        if self.has(r"\b(add|more|extra|introduce|deploy|buy|inject|fewer)\b"):
+            return None
+
+        lifting = self.has(r"\b(allow|unban|let .* back|lift|remove the ban)\b")
+        arm, notes = self.find_arm(), []
+        if arm is None:
+            return reject(
+                self.raw,
+                "Name which approach the restriction is on. A ban applies to "
+                "one arm of this junction, not to a road, because one arm is "
+                "as much of the road as this model has.",
+                notes=[a + " - the " + ARM_NAME[a] + " approach" for a in "NESW"])
+        return Instruction(
+            True, "restrict_access",
+            {"vehicle_class": class_name, "arm": arm, "banned": not lifting},
+            utterance=self.raw, notes=notes + [
+                "Demand of that class on that arm is turned away and counted, "
+                "not re-routed: one junction has no other arm for it to "
+                "arrive on.",
+                "An access restriction is not part of the calibrated model. "
+                "Read the result as a comparison against baseline."],
+            summary=(("Allow " if lifting else "Ban ")
+                     + _class_plural(class_name)
+                     + (" back onto the " if lifting else " from the ")
+                     + arm + " approach"))
+
+    def fleet(self):
+        """'6,000 e-buses' - an absolute count added to the road."""
+        if not self.has(r"\b(add|added|more|extra|introduce|introducing|deploy|"
+                        r"deploying|buy|buying|inject|put|bring in|scheme|"
+                        r"fleet|procure)\b"):
+            return None
+        class_name = self.find_class()
+        if class_name is None:
+            return None
+        if self.has(r"\b(instead of|switch to|shift to|move to|use public)\b"):
+            return None                     # that's a mode shift
+
+        numbers = self.numbers()
+        if not numbers:
+            return reject(
+                self.raw,
+                "A fleet scenario needs a number of vehicles per hour. A "
+                "scheme's headline count (6,000 buses) is a city-wide fleet, "
+                "not an hourly flow through one junction - say how many of "
+                "them reach this junction in an hour.")
+
+        notes = ["Added on top of the calibrated flow, not sliced out of it - "
+                 "which is what buying vehicles actually does.",
+                 "This says what those vehicles do to THIS junction's queues. "
+                 "It is not what the scheme does city-wide; one junction "
+                 "cannot answer that.",
+                 "Reported as people moved as well as vehicles counted, on "
+                 "declared occupancies that nobody measured here."]
+        if self.has(r"\belectric\b|\be-bus"):
+            notes.append(self.ELECTRIC_NOTE)
+        return Instruction(
+            True, "inject_fleet",
+            {"vehicle_class": class_name, "veh_per_hour": abs(numbers[0])},
+            utterance=self.raw, notes=notes,
+            summary=("Add " + format(abs(numbers[0]), ".0f") + " "
+                     + _class_plural(class_name)
+                     + " per hour on top of the current flow"))
+
+    def mode_shift(self):
+        """'What if people used public transit instead.'"""
+        if not self.has(r"\b(mode shift|modal shift|switch|shifted?|instead of|"
+                        r"took the bus|use public|used public|public transit|"
+                        r"public transport|move to (the )?bus)\b"):
+            return None
+        if not self.has(r"\b(bus|buses|transit|public|metro)\b"):
+            return None
+
+        match = re.search(r"(\d+(?:\.\d+)?)\s*%", self.text)
+        numbers = self.numbers()
+        if match:
+            fraction = float(match.group(1)) / 100.0
+        elif numbers and numbers[0] <= 1.0:
+            fraction = numbers[0]
+        else:
+            return reject(
+                self.raw,
+                "A mode shift needs a size: what share of car and two-wheeler "
+                "trips moves onto buses. There is nothing in the archive that "
+                "would let the model pick one for you.")
+
+        return Instruction(
+            True, "set_mode_shift", {"fraction": round(fraction, 3)},
+            utterance=self.raw,
+            notes=["Car and two-wheeler trips are removed and replaced with "
+                   "bus trips at declared occupancies. Autos are left alone: "
+                   "an auto trip is already a hired trip.",
+                   "The occupancies are a prior, not a measurement, so this is "
+                   "swept the way the turning splits are - never fitted.",
+                   "It is a statement about this junction. What happens two "
+                   "signals away needs a corridor this model does not have."],
+            summary=("Move " + format(fraction * 100, ".0f") + "% of car and "
+                     "two-wheeler trips onto buses"))
+
+    def discipline(self):
+        """The dial behind 'HMVs incite the traffic'."""
+        if not self.has(r"\b(discipline|disciplined|undisciplined|uncontrolled|"
+                        r"aggressive|aggressively|assertive|reckless|"
+                        r"badly|rash|cut in|cutting in|push in|lane discipline|"
+                        r"well behaved|well-behaved|orderly)\b"):
+            return None
+        if not self.has(r"\b(hmv|hgv|hcv|truck|trucks|lorry|bus|buses|heavy)\b"):
+            return None
+
+        match = re.search(r"(\d+(?:\.\d+)?)\s*%", self.text)
+        if match:
+            value = float(match.group(1)) / 100.0
+        elif self.has(r"\b(disciplined|well behaved|well-behaved|orderly)\b") \
+                and not self.has(r"\bun(disciplined)?\b"):
+            value = 0.0
+        else:
+            value = 1.0
+        return Instruction(
+            True, "set_hmv_discipline", {"value": round(min(1.0, value), 3)},
+            utterance=self.raw,
+            notes=["0 is a heavy vehicle that waits for a gap, 1 is one that "
+                   "takes it. Moves conduct only - the dimensions stay where "
+                   "Indo-HCM put them.",
+                   "New behavioural ground, not a citation. Show it as a "
+                   "paired before/after on the same demand and the same "
+                   "signal, never as a level."],
+            summary=("Set heavy-vehicle driving discipline to "
+                     + format(value, ".2f") + " (0 waits for a gap, 1 takes one)"))
 
     def counterfactual(self):
         if not self.has(r"\b(what if|counterfactual|compare|would it help|"
@@ -491,6 +715,29 @@ def _validate_model_payload(utterance, action, payload):
             return reject(utterance, "Unknown obstruction type proposed.")
         if params.get("arm") not in C.ARM_TO_PHASE:
             params["arm"] = "N"
+
+    if action in ("restrict_access", "inject_fleet"):
+        if params.get("vehicle_class") not in CLASS_WORDS:
+            return reject(utterance, "The model proposed a vehicle class that "
+                                     "isn't in the fleet, so it was rejected "
+                                     "rather than mapped onto the nearest one.")
+    if action == "restrict_access":
+        if params.get("arm") not in C.ARM_TO_PHASE:
+            return reject(utterance, "An access restriction applies to one "
+                                     "named approach and no arm was given.")
+        params["banned"] = bool(params.get("banned", True))
+    if action == "inject_fleet":
+        try:
+            params["veh_per_hour"] = abs(float(params.get("veh_per_hour")))
+        except (TypeError, ValueError):
+            return reject(utterance, "A fleet scenario needs a number of "
+                                     "vehicles per hour.")
+    if action in ("set_mode_shift", "set_hmv_discipline"):
+        key = "fraction" if action == "set_mode_shift" else "value"
+        try:
+            params[key] = max(0.0, min(1.0, float(params.get(key))))
+        except (TypeError, ValueError):
+            return reject(utterance, "That needs a fraction between 0 and 1.")
 
     return Instruction(True, action, params, utterance=utterance,
                        corrections=corrections,

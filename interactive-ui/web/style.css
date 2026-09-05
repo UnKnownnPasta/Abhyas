@@ -1470,3 +1470,53 @@ h1, h2, h3, h4, .sig-title, .tab, summary, .modal-head h3,
   outline: 2px solid var(--blue);
   outline-offset: -2px;
 }
+
+/* ------------------------------------------- fleet, access and scenarios */
+/* Exploratory controls are marked once at the top of the modal and once per
+   dial. Not decoration: these dials are not part of the calibrated model and
+   a reading taken off one has to carry that with it. */
+.exploratory-banner {
+  margin: 0 0 12px; padding: 8px 10px; font-size: 11px; line-height: 1.5;
+  color: var(--amber); background: rgba(255,200,87,.07);
+  border: 1px solid rgba(255,200,87,.25); border-radius: 8px;
+}
+.control.exploratory .label::after {
+  content: 'exploratory'; margin-left: 7px; font-size: 9px;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--amber);
+  border: 1px solid rgba(255,200,87,.35); border-radius: 4px; padding: 1px 4px;
+}
+
+.access-grid { margin-bottom: 14px; }
+.access-head, .access-row {
+  display: grid; grid-template-columns: 1fr repeat(4, 34px);
+  align-items: center; gap: 8px;
+}
+.access-head {
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint); padding-bottom: 6px;
+}
+.access-head span:not(:first-child) { text-align: center; }
+.access-row { padding: 5px 0; border-top: 1px solid rgba(29,40,54,.7); }
+.access-name { font-size: 12.5px; color: var(--dim); }
+.access-cell {
+  height: 26px; border-radius: 7px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--red); font-size: 12px; line-height: 1;
+}
+.access-cell:hover:not(:disabled) { border-color: var(--blue); }
+.access-cell.on { background: rgba(255,107,107,.14); border-color: var(--red); }
+.access-cell:disabled { opacity: .4; cursor: not-allowed; }
+
+.preset-row {
+  display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 12px;
+  padding: 10px 0; border-top: 1px solid rgba(29,40,54,.7);
+}
+.preset-row:first-child { border-top: none; }
+.preset-row.broken { opacity: .55; }
+.preset-label { font-size: 13px; color: var(--ink); }
+.preset-row .fineprint { margin-top: 4px; }
+.tag-exploratory {
+  margin-left: 7px; font-size: 9px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--amber);
+  border: 1px solid rgba(255,200,87,.35); border-radius: 4px; padding: 1px 4px;
+}

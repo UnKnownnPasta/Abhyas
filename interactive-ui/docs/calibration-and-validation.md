@@ -199,6 +199,44 @@ rather than paying for their own.
 
 ---
 
+## 7a. Scenario levers, and why they are not parameters
+
+Section 1 rests on there being exactly one fitted number. The fleet and access
+scenarios added for policy questions introduce several more dials, so the line
+between the two has to be written down rather than remembered.
+
+**Nothing below is fitted. Nothing below is validated. Every one of them is a
+declared prior of the same kind as `DEFAULT_SPLITS`: it is swept, the verdict
+is checked for whether it survives the sweep, and the result is reported as a
+comparison against baseline and never as a level.** The control surface marks
+them `exploratory: true`, the UI badges them, every run that moves one carries
+a warning saying so, and `counterfactual.py` refuses to present the card
+without that note.
+
+| Lever | Where | Status |
+|---|---|---|
+| `hcv` vehicle class | `demand.py` — `VEHICLE_CLASSES["hcv"]` | Dimensions and gap acceptance are Indo-HCM 2017 Ch.4, same standard as the other four. **Its share is not.** |
+| `hcv` share in the default mix | `demand.py` — `VEHICLE_CLASSES["hcv"]["share"]` | **Declared, not counted.** It was taken out of the car and bus shares, so every calibrated number in this document predates a mix that contains trucks and the baseline needs a re-run against one. Sweep it with `fleet.hcv_share`. |
+| `hmv_discipline` | `demand.py` — `discipline_overrides()` | New behavioural ground, not a citation. Moves `lcPushy`, `lcAssertive`, `jmTimegapMinor` and `impatience` on the heavy classes between two declared endpoints, linearly, because nothing justifies another shape. Dimensions are untouched. |
+| `hmv_stop_rate` | `sim.py` — `Collector._maybe_stop()` | Declared rate. The realised rate is lower wherever no stretch of the vehicle's route is long enough to stop in, and the run reports both. |
+| Occupancy per class | `demand.py` — `occupancy()` | Declared prior. It is what turns a vehicle count into a person count, and it is also the reason a person-throughput figure must not be quoted to three significant figures. |
+| `injected` fleet | `demand.py` — `DemandSpec.class_rates()` | Not a prior, an input: it says what N more vehicles per hour do to **this junction**. It is not a claim about a city-wide scheme, and one junction cannot be made into one. |
+| `mode_shift` | `demand.py` — `DemandSpec.class_rates()` | Input plus the occupancy prior above. Removes car and two-wheeler trips and adds the bus trips that carry those people. Autos are left alone. |
+| Access restrictions | `demand.py` / `sim.py` — `apply_access_restrictions()` | An input, not a prior. Banned demand is withheld and **counted**, never re-routed: one junction has no other arm for it to arrive on. |
+
+Two guards keep this honest rather than aspirational. `selftest.py` asserts that
+a ban actually withholds the demand it names and leaves the other arms alone,
+and that moving a fleet lever hard actually moves the output — the same guard
+the signal plan has had since the beginning, for the same reason.
+
+What none of this buys: **emissions**, still not modelled and still refused by
+name in `nlu.OUT_OF_SCOPE`, which matters because an electric-bus scheme is at
+bottom an emissions argument; and **network effects**, which need the wider
+network routed and its own ground truth per junction, i.e. a second run of
+everything in this document rather than an extension of it.
+
+---
+
 ## 8. File map
 
 | What | Where |
@@ -206,7 +244,8 @@ rather than paying for their own.
 | Calibration algorithm | `abhyas/agents.py:297` — `CalibrationAgent`; `_probe` runs one level, `_best` selects, `_steepness` checks conditioning |
 | Seeds per level | `abhyas/agents.py:43` — `CALIBRATION_SEEDS = 12` |
 | Frozen vehicle and driver parameters | `abhyas/demand.py:34` — `VEHICLE_CLASSES`, each with its citation |
-| Declared priors (never fitted) | `abhyas/demand.py:154` — `DEFAULT_SPLITS`; `:159` — `DEFAULT_ARM_SHARE` |
+| Declared priors (never fitted) | `abhyas/demand.py` — `DEFAULT_SPLITS`, `DEFAULT_ARM_SHARE` |
+| Scenario levers (exploratory, see 7a) | `abhyas/demand.py` — `DemandSpec.LEVERS`; `abhyas/controls.py` — `EXPLORATORY_GROUPS` |
 | Sublane resolution (two-wheeler filtering) | `abhyas/demand.py:104` — `LATERAL_RESOLUTION = 0.30` |
 | Ground-truth loader | `abhyas/archive.py:181` — `Archive.target()` |
 | One simulation run | `abhyas/sim.py:419` — `run_once()`; `:239` — `Collector`; `:416` — `WARMUP_S` |

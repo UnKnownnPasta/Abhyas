@@ -31,19 +31,26 @@ APPROACH_METRICS = [
 OVERALL_METRICS = [
     ("queue_mean_veh", "Mean queue, all approaches", True, "vehicles"),
     ("throughput_veh_per_hour", "Junction throughput", False, "veh/h"),
+    # A scheme that swaps 25 cars for one bus moves fewer vehicles on purpose.
+    # Reporting only the vehicle count would score that as a loss.
+    ("person_throughput_per_hour", "People moved", False, "people/h"),
 ]
 
 
 class Counterfactual:
     """One signal change, compared against baseline over paired seeds."""
 
-    def __init__(self, delta_seconds=10.0, phase_group="north_south", seeds=30,
+    def __init__(self, delta_seconds=0.0, phase_group="north_south", seeds=30,
                  spec=None, base_plan=None, workers=4, splits_sweep=True,
-                 progress=None):
+                 progress=None, scenario_spec=None):
         self.delta_seconds = delta_seconds
         self.phase_group = phase_group
         self.seeds = seeds
         self.spec = spec or D.DemandSpec()
+        # A fleet or access scenario changes the traffic, not the signal. It is
+        # compared exactly the same way: same seeds, paired differences, a band
+        # and a verdict that is allowed to be "cannot resolve".
+        self.scenario_spec = scenario_spec or self.spec
         self.base_plan = base_plan or T.baseline_plan()
         self.scenario_plan = T.apply_delta(self.base_plan, phase_group, delta_seconds)
         self.progress = progress or (lambda **kw: None)
@@ -70,8 +77,8 @@ class Counterfactual:
         base = G.Batch(self.pool.run(self.spec, self.base_plan, self.seed_list,
                                      tag="baseline"))
         self.progress(kind="counterfactual", state="scenario", seeds=self.seeds)
-        scen = G.Batch(self.pool.run(self.spec, self.scenario_plan, self.seed_list,
-                                     tag="scenario"))
+        scen = G.Batch(self.pool.run(self.scenario_spec, self.scenario_plan,
+                                     self.seed_list, tag="scenario"))
 
         card = {
             "change": {
@@ -88,11 +95,22 @@ class Counterfactual:
             "seeds_requested": self.seeds,
             "seeds_completed": {"baseline": len(base), "scenario": len(scen)},
             "demand": self.spec.to_dict(),
+            "scenario_demand": self.scenario_spec.to_dict(),
+            "fleet_changes": self._lever_changes(),
+            "exploratory": bool(self.spec.is_exploratory
+                                or self.scenario_spec.is_exploratory),
             "movements": {},
             "approaches": {},
             "overall": {},
             "notes": [],
         }
+        if card["exploratory"]:
+            card["notes"].append(
+                "This comparison moves a fleet or access lever. Those are "
+                "declared priors, swept and not fitted, and nothing in the "
+                "validation archive constrains them: the verdict is a "
+                "comparison between two model runs, not a validated result "
+                "about the road.")
         if clamped:
             card["notes"].append("The requested change was clamped: a phase "
                                  "can't go below " + str(int(T.MIN_GREEN_S))
@@ -132,6 +150,13 @@ class Counterfactual:
         out.write_text(json.dumps(card, indent=2), encoding="utf-8")
         card["saved_to"] = str(out)
         return card
+
+    def _lever_changes(self):
+        """Which fleet/access levers differ between the two specs."""
+        before, after = self.spec.to_dict(), self.scenario_spec.to_dict()
+        return {lever: {"from": before.get(lever), "to": after.get(lever)}
+                for lever in D.DemandSpec.LEVERS
+                if before.get(lever) != after.get(lever)}
 
     # -- reading the card --------------------------------------------------
 
@@ -176,6 +201,22 @@ class Counterfactual:
     def _honesty_notes(card):
         notes = []
         verdict = card["verdict"]
+
+        people = card["overall"].get("person_throughput_per_hour")
+        if people and card.get("fleet_changes"):
+            notes.append(
+                "People moved is computed from the declared occupancies in "
+                "demand.VEHICLE_CLASSES, which nobody counted on this "
+                "corridor. It is the right quantity for a transit argument and "
+                "the wrong one to quote to three significant figures.")
+            if (people["comparison"]["verdict"] == "improves"
+                    and card["overall"]["throughput_veh_per_hour"]
+                    ["comparison"]["verdict"] == "worsens"):
+                notes.append(
+                    "The junction moves fewer vehicles and more people. That "
+                    "is the transit argument working as intended, and it is "
+                    "also exactly the result a vehicle-only count would have "
+                    "reported as a failure.")
         pairs = card["overall"]["queue_mean_veh"]["comparison"].get("n_pairs", 0)
 
         if verdict["junction_overall"] == "cannot resolve":
@@ -204,12 +245,15 @@ class Counterfactual:
         rows = []
         seed_list = list(range(1, seeds + 1))
         for label, splits in G.SensitivityAgent.SPLITS:
+            # the split moves on both sides at once - it is the thing being
+            # swept, not part of the change under test
             variant = self.spec.copy(turning_splits=dict(splits))
+            scen_variant = self.scenario_spec.copy(turning_splits=dict(splits))
             self.progress(kind="counterfactual", state="splits", splits=label)
             base = G.Batch(self.pool.run(variant, self.base_plan, seed_list,
                                          tag="sweep-base-" + label))
-            scen = G.Batch(self.pool.run(variant, self.scenario_plan, seed_list,
-                                         tag="sweep-scen-" + label))
+            scen = G.Batch(self.pool.run(scen_variant, self.scenario_plan,
+                                         seed_list, tag="sweep-scen-" + label))
             comparison = Stats.paired_difference(
                 base.overall_series("queue_mean_veh"),
                 scen.overall_series("queue_mean_veh"), higher_is_worse=True)
@@ -247,11 +291,12 @@ class Counterfactual:
 
 
 def run(delta_seconds=10.0, phase_group="north_south", seeds=30, spec=None,
-        base_plan=None, workers=4, splits_sweep=True, progress=None):
+        base_plan=None, workers=4, splits_sweep=True, progress=None,
+        scenario_spec=None):
     return Counterfactual(delta_seconds=delta_seconds, phase_group=phase_group,
                           seeds=seeds, spec=spec, base_plan=base_plan,
                           workers=workers, splits_sweep=splits_sweep,
-                          progress=progress).run()
+                          progress=progress, scenario_spec=scenario_spec).run()
 
 
 if __name__ == "__main__":
