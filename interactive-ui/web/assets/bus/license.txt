@@ -1,0 +1,11 @@
+Model Information:
+* title:	Volvo 8700 LE
+* source:	https://sketchfab.com/3d-models/volvo-8700-le-c1fad0cec48a401c8eb9ac4924f12277
+* author:	zairiq-zairiq-123-pixar-cars-bfdi (https://sketchfab.com/zairiqzairiqpixarcarsbfdi)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Volvo 8700 LE" (https://sketchfab.com/3d-models/volvo-8700-le-c1fad0cec48a401c8eb9ac4924f12277) by zairiq-zairiq-123-pixar-cars-bfdi (https://sketchfab.com/zairiqzairiqpixarcarsbfdi) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

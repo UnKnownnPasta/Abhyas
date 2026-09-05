@@ -95,11 +95,19 @@ interactive-ui/web/assets/
   two_wheeler/scene.gltf      twowheeler    committed
   auto_rickshaw/scene.gltf    auto          committed
   low_poly_car/scene.gltf     car           committed
+  truck/scene.gltf            hcv           committed
   bus/scene.gltf              bus           committed
   cow/scene.gltf              obstruction   still falls back to the car
   stalled_vehicle/scene.gltf  obstruction   still falls back to the car
   roadworks/scene.gltf        obstruction   still falls back to the car
 ```
+
+`truck/` used to be `bus/`. The model is a semi truck and always was, and with
+an `hcv` class in the fleet it now drives the class it actually looks like. A
+real bus - a Volvo 8700 LE - took over the `bus/` slot, so the two heavy
+classes are no longer the same silhouette on screen. That matters more than it
+sounds: the whole point of the HMV work is watching how a bus and a truck
+behave differently, and two identical boxes hide it.
 
 Licences of what is committed, all from Sketchfab, all requiring credit:
 
@@ -108,12 +116,13 @@ Licences of what is committed, all from Sketchfab, all requiring credit:
 | low_poly_car | BMW M3 Low-Poly Stylized, by kulonee | CC-BY-**SA**-4.0 |
 | two_wheeler | Stylized Muscle Bike, by Poras_Gamer | CC-BY-4.0 |
 | auto_rickshaw | Autorickshaw 3d model free, by iGauravRajput | CC-BY-4.0 |
-| bus | White Low Poly Semi Truck, by Polyjo | CC-BY-**NC**-4.0 |
+| bus | Volvo 8700 LE, by zairiq-zairiq-123-pixar-cars-bfdi | CC-BY-4.0 |
+| truck | White Low Poly Semi Truck, by Polyjo | CC-BY-**NC**-4.0 |
 
 Two of those carry more than plain attribution. The car is share-alike, so
-anything derived from it inherits that licence. The truck standing in for the
-bus is **non-commercial** - as long as it is in the tree, the bundle cannot be
-used commercially. Swap it for a CC-BY or CC0 model if that matters.
+anything derived from it inherits that licence. The truck is
+**non-commercial** - as long as it is in the tree, the bundle cannot be used
+commercially. Swap it for a CC-BY or CC0 model if that matters.
 
 `scene.gltf` is what a Sketchfab zip unpacks to - keep the `.bin` and textures
 beside it. For a single `.glb`, set `files` on that entry in `VEHICLE_MODELS`
