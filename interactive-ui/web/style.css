@@ -40,6 +40,50 @@ body {
 
 button, input, select { font: inherit; color: inherit; }
 
+/* ========================================================= loading screen */
+
+.loading-screen {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 26px;
+  transition: opacity .35s ease;
+}
+.loading-screen.done { opacity: 0; pointer-events: none; }
+.loading-screen[hidden] { display: none; }
+
+.loading-cube {
+  position: relative;
+  width: 74px; height: 74px;
+  transform-style: preserve-3d;
+  animation: cube-spin 3.4s linear infinite;
+}
+.cube-face {
+  position: absolute; inset: 0;
+  border: 2px solid var(--blue);
+  background: rgba(89, 194, 255, .07);
+}
+.cube-front  { transform: translateZ(37px); }
+.cube-back   { transform: rotateY(180deg) translateZ(37px); }
+.cube-right  { transform: rotateY(90deg) translateZ(37px); }
+.cube-left   { transform: rotateY(-90deg) translateZ(37px); }
+.cube-top    { transform: rotateX(90deg) translateZ(37px); }
+.cube-bottom { transform: rotateX(-90deg) translateZ(37px); }
+
+@keyframes cube-spin {
+  from { transform: rotateX(-24deg) rotateY(0deg); }
+  to   { transform: rotateX(-24deg) rotateY(360deg); }
+}
+
+.loading-brand {
+  font: 700 13px/1 ui-monospace, Menlo, monospace;
+  letter-spacing: .42em; color: var(--ink); padding-left: .42em;
+}
+.loading-step {
+  font-size: 11.5px; color: var(--faint); min-height: 1.4em;
+}
+.loading-step.bad { color: var(--red); }
+
 /* ================================================================== main */
 
 main, .sim-main {
@@ -408,6 +452,24 @@ select {
   padding: 8px 0 4px; font-size: 12.5px; color: var(--dim);
 }
 .signal-readout .q { font: 12px ui-monospace, Menlo, monospace; color: var(--ink); }
+
+/* Force the focused approach red/yellow/green. The lamp above reports what
+ * the junction is actually showing, which is not always what was asked for -
+ * the program carries on from the phase this jumps to. */
+.signal-switch {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 6px; padding: 4px 0 10px;
+}
+.sig-btn {
+  padding: 7px 0; font-size: 12px; font-weight: 700; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--faint);
+  border-radius: 8px;
+}
+.sig-btn:hover { color: var(--ink); }
+.sig-btn.red:hover, .sig-btn.red.on { border-color: var(--red); color: var(--red); }
+.sig-btn.yellow:hover, .sig-btn.yellow.on { border-color: var(--amber); color: var(--amber); }
+.sig-btn.green:hover, .sig-btn.green.on { border-color: var(--green); color: var(--green); }
+.sig-btn.on { background: rgba(255,255,255,.05); }
 
 #master-slider .control { border-top: none; padding-top: 0; }
 

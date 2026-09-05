@@ -613,18 +613,39 @@ class LiveSession:
             self.remove_obstruction(obstruction)
         return len(standing)
 
+    def arm_colour(self, state, arm):
+        """What one approach shows under a red/yellow/green state string."""
+        colours = {state[link.index] for link in self.model.links
+                   if link.from_arm == arm and link.index < len(state)}
+        if colours & {"G", "g"}:
+            return "green"
+        if colours & {"y", "Y"}:
+            return "yellow"
+        return "red"
+
     def signal_by_arm(self, state):
-        arm_signal = {}
-        for arm in "NESW":
-            colours = {state[link.index] for link in self.model.links
-                       if link.from_arm == arm and link.index < len(state)}
-            if colours & {"G", "g"}:
-                arm_signal[arm] = "green"
-            elif colours & {"y", "Y"}:
-                arm_signal[arm] = "yellow"
-            else:
-                arm_signal[arm] = "red"
-        return arm_signal
+        return {arm: self.arm_colour(state, arm) for arm in "NESW"}
+
+    def set_arm_signal(self, arm, colour):
+        """Jump the controller to the phase that shows `arm` this colour.
+
+        A nudge, not a hold: the program carries on from that phase, so the
+        cycle resumes by itself instead of the junction freezing on one
+        approach. There is no phase that shows a single arm yellow on its
+        own, so yellow lands on that arm's own inter-green.
+        """
+        if arm not in "NESW":
+            raise ValueError("No approach called " + str(arm) + ".")
+        if colour not in ("green", "yellow", "red"):
+            raise ValueError("A signal is green, yellow or red - not "
+                             + str(colour) + ".")
+        phases = T.build_program(self.plan, self.model.links)
+        for index, phase in enumerate(phases):
+            if self.arm_colour(phase.state, arm) == colour:
+                self.conn.trafficlight.setPhase(C.JUNCTION_ID, index)
+                return {"arm": arm, "colour": colour, "phase_index": index}
+        raise ValueError("This plan has no phase where " + arm + " is "
+                         + colour + ".")
 
     def snapshot(self):
         """Everything the browser needs for one frame."""

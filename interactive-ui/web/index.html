@@ -17,6 +17,22 @@
 </head>
 <body>
 
+<!-- Covers the app until the geometry, context and 3d scene are all in.
+     boot() takes it down - including on the failure path, so a dead server
+     shows the error rather than a cube spinning forever. -->
+<div class="loading-screen" id="loading-screen">
+  <div class="loading-cube">
+    <span class="cube-face cube-front"></span>
+    <span class="cube-face cube-back"></span>
+    <span class="cube-face cube-right"></span>
+    <span class="cube-face cube-left"></span>
+    <span class="cube-face cube-top"></span>
+    <span class="cube-face cube-bottom"></span>
+  </div>
+  <div class="loading-brand">ABHYAS</div>
+  <div class="loading-step" id="loading-step">Reaching the simulation…</div>
+</div>
+
 <!-- =================================================== VIEW 1: 3D SIMULATION -->
 <div id="view-sim" class="view-panel active">
   <main class="sim-main">
@@ -76,6 +92,12 @@
             <span class="lamp" id="arm-active-lamp"></span>
             <span class="name" id="arm-active-name">N approach</span>
             <span class="q" id="arm-active-q">—</span>
+          </div>
+
+          <div class="signal-switch" id="signal-switch">
+            <button class="sig-btn red" data-colour="red" title="Send this approach red">R</button>
+            <button class="sig-btn yellow" data-colour="yellow" title="Send this approach yellow">Y</button>
+            <button class="sig-btn green" data-colour="green" title="Send this approach green">G</button>
           </div>
 
           <div id="master-slider"></div>

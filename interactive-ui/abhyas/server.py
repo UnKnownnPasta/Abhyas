@@ -209,6 +209,10 @@ class SimWorker(threading.Thread):
             placed = session.add_obstruction(payload)
             self.bus.publish({"type": "applied", "what": "obstruction",
                               "obstruction": placed})
+        elif command == "set_arm_signal":
+            applied = session.set_arm_signal(payload["arm"], payload["colour"])
+            self.bus.publish({"type": "applied", "what": "signal",
+                              "signal": applied})
         elif command == "clear_obstructions":
             removed = session.clear_obstructions()
             self.bus.publish({"type": "applied", "what": "obstructions cleared",

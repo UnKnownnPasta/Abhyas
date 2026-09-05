@@ -31,9 +31,12 @@ const state = {
 
 async function boot() {
   try {
+    loadingStep('Reading the junction geometry…');
     state.geometry = await (await fetch('/api/geometry')).json();
+    loadingStep('Reading the calibrated context…');
     state.context = await (await fetch('/api/context')).json();
   } catch (err) {
+    loadingFailed('Could not reach the local server: ' + err.message);
     toast('Could not reach the local server: ' + err.message, 'bad');
     return;
   }
@@ -42,6 +45,7 @@ async function boot() {
     let retried = false;
     try { retried = sessionStorage.getItem('abhyas-stale-reload') === '1'; } catch (e) {}
     if (retried) {
+      loadingFailed('This page is out of date. Clear the cache (Ctrl+Shift+R).');
       toast('This page is out of date and a reload did not fix it. '
             + 'Clear the cache for this site (Ctrl+Shift+R).', 'bad');
       return;
@@ -65,6 +69,7 @@ async function boot() {
     'This model is validated on travel time only. Travel time says nothing ' +
     'about whether the turning proportions are right, and we cannot measure those.';
 
+  loadingStep('Building the 3d scene…');
   await waitForScene3D();
   window.Scene3D.init(mapCanvas());
   window.Scene3D.setGeometry(state.geometry);
@@ -86,9 +91,32 @@ async function boot() {
   wireCliDash();
   wireControlModals();
 
-  loadSurface();
+  loadingStep('Waiting for the first frame…');
+  await loadSurface();
   loadVersions();
   loadVoiceBackend();
+  loadingDone();
+}
+
+/* ====================================================== loading screen */
+
+function loadingStep(text) {
+  const el = $('loading-step');
+  if (el) el.textContent = text;
+}
+
+function loadingFailed(text) {
+  const el = $('loading-step');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'loading-step bad';
+}
+
+function loadingDone() {
+  const screen = $('loading-screen');
+  if (!screen) return;
+  screen.classList.add('done');
+  setTimeout(() => { screen.hidden = true; }, 400);
 }
 
 /* ============================================================= websocket */
@@ -300,6 +328,10 @@ function renderFrame(frame) {
   const q = $('arm-active-q');
   if (q) q.textContent = (frame.queues?.[name] ?? 0) + ' queued';
 
+  for (const button of document.querySelectorAll('.sig-btn')) {
+    button.classList.toggle('on', button.dataset.colour === colour);
+  }
+
   updateTrafficGrid(frame);
   if (frame.plan) renderPlan(frame.plan);
 }
@@ -359,6 +391,16 @@ function wireStage() {
     $('speed-label').textContent = value + '×';
     send('speed', { value });
   };
+
+  // Force the focused approach to a colour. The lamp keeps reporting what
+  // the junction actually shows, so an ignored request stays visible.
+  if ($('signal-switch')) {
+    $('signal-switch').onclick = (event) => {
+      const button = event.target.closest('.sig-btn');
+      if (!button) return;
+      send('set_arm_signal', { arm: state.dir, colour: button.dataset.colour });
+    };
+  }
 
   // The Controls/Versions/Results tab bar became a dropdown in the rail.
   if ($('rail-mode-select')) {
