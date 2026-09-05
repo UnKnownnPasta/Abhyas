@@ -96,6 +96,7 @@ class SimWorker(threading.Thread):
 
     daemon = True
 
+
     def __init__(self, broadcaster):
         super().__init__(name="abhyas-sim")
         self.bus = broadcaster

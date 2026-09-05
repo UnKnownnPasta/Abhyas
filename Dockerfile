@@ -18,10 +18,15 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# SUMO's binaries come inside the eclipse-sumo wheel already linked, so no apt
-# install of SUMO. The certs are for the optional outbound calls.
+# the eclipse-sumo wheel ships netconvert/sumo/sumo-gui binaries built against
+# Xerces-C, GCC runtime libs and a full X11/GL stack, none of which the slim
+# image carries. Pulling libs one failed binary at a time wastes a full
+# rebuild per lib, so install the whole set SUMO's upstream Docker image uses.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates libexpat1 libatomic1 libgomp1 \
+      libx11-6 libxext6 libxrender1 libxrandr2 libxfixes3 libxcursor1 \
+      libxi6 libsm6 libice6 libgl1 libglu1-mesa \
  && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv /opt/venv
@@ -54,7 +59,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl libexpat1 libatomic1 libgomp1 \
+      libx11-6 libxext6 libxrender1 libxrandr2 libxfixes3 libxcursor1 \
+      libxi6 libsm6 libice6 libgl1 libglu1-mesa \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --uid 10001 abhyas
 
