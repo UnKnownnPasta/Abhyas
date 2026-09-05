@@ -12,8 +12,13 @@
   --amber: #ffc857;
   --red: #ff6b6b;
   --orange: #ff8c42;
-  --rail: 420px;
-  --voice: 172px;
+  /* clamp(), not a fixed px, so these two side columns shrink with the
+   * viewport instead of pushing the layout past its edge on a narrow
+   * window - a fixed px pair here previously forced the rail off-screen
+   * with no way back short of a horizontal scrollbar. */
+  --rail: clamp(260px, 28vw, 420px);
+  --traffic-panel: clamp(150px, 17vw, 240px);
+  --voice: 56px;
 }
 
 * { box-sizing: border-box; }
@@ -37,12 +42,58 @@ button, input, select { font: inherit; color: inherit; }
 
 /* ================================================================== main */
 
-main {
+main, .sim-main {
   display: grid;
   grid-template-columns: 1fr var(--rail);
   flex: 1;
   min-height: 0;
 }
+
+/* ------------------------------------------- traffic panel: floats on canvas */
+
+.traffic-panel {
+  width: var(--traffic-panel);
+  margin-top: 10px;
+  background: transparent;
+  pointer-events: auto;
+}
+.brand-badge {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  background: var(--blue);
+  color: #0d131a;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.junction-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.traffic-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.traffic-cell {
+  background: rgba(14, 20, 28, .72);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.traffic-cell:hover { border-color: #2c3a4d; }
+.traffic-cell.active { border-color: var(--blue); }
+.traffic-cell-head { display: flex; align-items: center; gap: 7px; }
+.traffic-cell-name { font-size: 12px; color: var(--dim); }
+.traffic-cell-q { font: 15px ui-monospace, Menlo, monospace; color: var(--ink); }
 
 /* ================================================================= stage */
 
@@ -101,26 +152,31 @@ input[type=range]::-webkit-slider-thumb {
 #map { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
 #map.grabbing { cursor: grabbing; }
 
+/* The pill floats over the bottom of the canvas, so anything anchored to
+ * the bottom clears it. */
 .overlay { position: absolute; pointer-events: none; }
 .overlay-tl { top: 12px; left: 12px; }
 .overlay-tr { top: 12px; right: 12px; }
-.overlay-bl { bottom: 12px; left: 12px; }
-.overlay-br { bottom: 12px; right: 12px; }
+/* left:190px clears the mic; the extra height clears the credit line, which
+ * shares the bottom edge on a narrow canvas. */
+.overlay-bl { bottom: calc(var(--voice) + 48px); left: 190px; }
+.overlay-br { bottom: calc(var(--voice) + 26px); right: 12px; }
 
-.sig-block {
+/* top-left overlay: the junction name, with the 2x2 approach grid floating
+ * under it - the canvas owns the full width underneath both. */
+.junction-label {
+  display: inline-flex; align-items: center; gap: 8px;
   background: rgba(14, 20, 28, .82);
-  border: 1px solid var(--line); border-radius: 12px;
-  padding: 11px 14px; backdrop-filter: blur(7px); min-width: 210px;
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 7px 14px; backdrop-filter: blur(7px);
 }
-.sig-title {
-  font-size: 9.5px; letter-spacing: 1.3px; text-transform: uppercase;
-  color: var(--faint);
-}
-.sig-phase { font-size: 14px; font-weight: 600; margin-top: 3px; }
-.sig-count { margin-top: 5px; font-size: 22px; font-weight: 600; }
-.sig-count .unit { font-size: 10.5px; color: var(--faint); margin-left: 6px; font-weight: 400; }
+
+/* compact signal readout, now inline in the left panel header */
+.sig-phase { font-size: 12px; font-weight: 600; }
+.sig-count { font-size: 13px; font-weight: 600; }
+.sig-count .unit { font-size: 10px; color: var(--faint); margin-left: 2px; font-weight: 400; }
 .sig-plan {
-  margin-top: 7px; font: 10.5px ui-monospace, Menlo, monospace; color: var(--dim);
+  margin: 2px 0 6px; font: 10px ui-monospace, Menlo, monospace; color: var(--faint);
 }
 
 .arm-grid {
@@ -196,19 +252,30 @@ input[type=range]::-webkit-slider-thumb {
 
 .legend {
   display: flex; flex-wrap: wrap; gap: 4px 12px;
-  max-width: 300px; justify-content: flex-end;
+  max-width: 220px; justify-content: flex-end;
   font-size: 10.5px; color: var(--dim);
 }
 .legend .item { display: inline-flex; align-items: center; gap: 5px; }
 .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 
+/* top-right overlay: heading compass + which vehicle models are present */
+.compass-model-block {
+  background: rgba(14, 20, 28, .82);
+  border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px 4px; backdrop-filter: blur(7px);
+  pointer-events: auto;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.compass-overlay .compass { margin-bottom: 4px; }
+
 .credit {
-  position: absolute; left: 50%; bottom: 3px; transform: translateX(-50%);
+  position: absolute; right: 12px; bottom: calc(var(--voice) + 26px);
   font-size: 9px; color: var(--faint); opacity: .55; pointer-events: none;
 }
 
 .toast-stack {
-  position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px;
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--voice) + 40px);
   display: flex; flex-direction: column; gap: 7px; align-items: center;
   pointer-events: none; max-width: 78%;
 }
@@ -307,20 +374,42 @@ select {
   border-radius: 9px; padding: 6px 9px; color: var(--dim);
 }
 
+/* ---- rail mode selector (replaces the old Controls/Versions/Results tabs) */
+
+.rail-select-row {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px 8px; padding: 10px 12px; border-bottom: 1px solid var(--line);
+}
+.rail-mode-select {
+  flex: 1; min-width: 90px; font-weight: 600; font-size: 12.5px;
+}
+.phase-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---- control deck ---- */
 
-#control-deck details {
+#control-deck details, .advanced-signal {
   border: 1px solid var(--line); border-radius: 11px;
   margin-bottom: 9px; background: var(--panel); overflow: hidden;
 }
-#control-deck summary {
+#control-deck summary, .advanced-signal summary {
   cursor: pointer; padding: 9px 12px; font-size: 11.5px;
   color: var(--dim); display: flex; justify-content: space-between;
   list-style: none;
 }
-#control-deck summary::-webkit-details-marker { display: none; }
+#control-deck summary::-webkit-details-marker,
+.advanced-signal summary::-webkit-details-marker { display: none; }
 #control-deck summary .count { color: var(--faint); font-size: 10.5px; }
 .group-body { padding: 4px 12px 12px; }
+
+/* ---- Control pane: compass + signal lamp + one slider + shortcuts ---- */
+
+.signal-readout {
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  padding: 8px 0 4px; font-size: 12.5px; color: var(--dim);
+}
+.signal-readout .q { font: 12px ui-monospace, Menlo, monospace; color: var(--ink); }
+
+#master-slider .control { border-top: none; padding-top: 0; }
 
 .dir-picker {
   padding: 10px 12px 4px; border-bottom: 1px solid var(--line);
@@ -328,11 +417,19 @@ select {
 }
 .dir-picker .fineprint { margin: 0 0 4px; }
 
-.obstruction-picker { margin-bottom: 8px; }
-.obstruction-kind {
-  width: 100%; background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: 7px; padding: 7px 9px; color: var(--ink); font-size: 12.5px;
+/* one row per obstruction kind: name, which approach, how many */
+.obstruction-row {
+  display: grid; grid-template-columns: 1fr auto auto;
+  align-items: center; gap: 10px;
+  padding: 6px 0; border-top: 1px solid rgba(29,40,54,.7);
 }
+.obstruction-row:first-child { border-top: none; }
+.obstruction-name { font-size: 12.5px; color: var(--dim); }
+.obstruction-arm {
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 8px; color: var(--ink); font-size: 12.5px;
+}
+.obstruction-row .stepper { padding: 0; gap: 8px; }
 
 .stepper {
   display: flex; align-items: center; gap: 10px;
@@ -491,59 +588,94 @@ tr.excluded { opacity: .55; }
   background: var(--panel); border-radius: 8px; padding: 8px;
 }
 
-/* ============================================================== voicebar */
+/* ============================================================== pillbar
+ * The old top nav is gone; this bar is the one thing that's always on
+ * screen. It floats over the canvas rather than taking a row of its own,
+ * stops short of the rail, and stays shallow - the mic is bigger than the
+ * bar is tall and overflows its top edge on purpose.
+ * Left = mic + transport + speed/zoom + view switch. Right = the typed
+ * instruction + a few suggestion pills - nothing else. */
 
-.voicebar {
-  flex: none;
-  height: var(--voice);
-  border-top: 1px solid var(--line);
-  background: var(--panel);
-  display: grid; grid-template-columns: 120px 1fr;
-  gap: 14px; padding: 10px 16px;
-  align-items: start;
+.pillbar {
+  position: fixed;
+  left: 16px;
+  right: calc(var(--rail) + 16px);
+  bottom: 14px;
+  min-height: var(--voice);
+  background: rgba(14, 20, 28, .92);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  backdrop-filter: blur(7px);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 6px 18px 6px 172px;
+  z-index: 30;
 }
 
+/* The left cluster never shrinks; the suggestion chips on the right clip
+ * instead, so narrowing the window drops suggestions rather than mangling
+ * the transport controls. */
+.pill-left {
+  display: flex; align-items: center; gap: 10px;
+  flex: none;
+}
+.transport { display: flex; align-items: center; gap: 6px; flex: none; }
+
+/* speed/zoom live on the pill now, not the old wide simbar - keep them small */
+.pill-left input[type=range] { width: 64px; }
+.pill-left .field { gap: 4px; }
+.pill-left .field span { font-size: 13px; }
+
+/* Deliberately taller than the bar: it sits on the bar's left end and
+ * rises out of the top of it. */
 .micbtn {
-  width: 120px; height: 120px; padding: 0;
+  position: absolute; left: 6px; bottom: -8px;
+  width: 162px; height: 162px; padding: 0;
   background: none; border: none; cursor: pointer;
   border-radius: 50%;
+  z-index: 31;
 }
 .micbtn:disabled { opacity: .4; cursor: default; }
 #blob { display: block; }
 
-.voicebody { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
-
-.voicehead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.micstate { font-size: 12.5px; color: var(--dim); }
-.micstate.ok { color: var(--green); }
-.micstate.warn { color: var(--amber); }
-.micstate.bad { color: var(--red); }
-.voicehead .fineprint { margin: 0; flex: 1; min-width: 0; }
-
-.ask { display: flex; gap: 8px; }
-.ask input {
-  flex: 1; background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: 10px; padding: 9px 13px; font-size: 13px; outline: none;
+.pill-right {
+  display: flex; align-items: center; gap: 10px;
+  min-width: 0; flex: 1 1 auto; overflow: hidden; justify-content: flex-end;
 }
-.ask input:focus { border-color: var(--blue); }
-
-.examples { display: flex; gap: 6px; flex-wrap: wrap; overflow: hidden; max-height: 26px; }
-.chip {
-  background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: 999px; padding: 4px 11px; font-size: 10.5px;
-  color: var(--faint); cursor: pointer; white-space: nowrap;
+.pill-ask { display: flex; flex: 0 1 460px; min-width: 90px; }
+.pill-ask input {
+  width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 8px 15px; font-size: 12.5px; outline: none;
 }
-.chip:hover { color: var(--ink); border-color: #2c3a4d; }
+.pill-ask input:focus { border-color: var(--blue); }
+
+.view-switch {
+  display: flex; gap: 4px;
+  background: var(--panel-2); padding: 3px; border-radius: 999px;
+  border: 1px solid var(--line);
+}
+.view-tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 999px; font-size: 14px; font-weight: 500;
+  color: var(--dim); background: transparent; border: none; cursor: pointer;
+  transition: all .15s ease; white-space: nowrap;
+}
+.view-tab:hover { color: var(--ink); background: rgba(255,255,255,.04); }
+.view-tab.active { background: var(--blue); color: #0b1118; font-weight: 600; }
+.tab-indicator { color: var(--amber); font-size: 10px; animation: pulse 1.2s infinite; }
+@keyframes pulse { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
+
+.pill-left .field output { min-width: 34px; }
 
 /* The proposal lifts above the bar rather than growing it, so accepting or
  * discarding never moves the map underneath. */
 .proposal {
-  position: fixed; right: 16px; bottom: calc(var(--voice) + 10px);
+  position: fixed; right: 16px; bottom: calc(var(--voice) + 26px);
   width: min(560px, calc(100vw - 32px));
   background: var(--panel-2); border: 1px solid var(--line);
   border-radius: 13px; padding: 13px;
   box-shadow: 0 18px 44px rgba(0,0,0,.55);
-  z-index: 20;
+  z-index: 40;
 }
 .proposal-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -568,147 +700,35 @@ tr.excluded { opacity: .55; }
 }
 .refusal b { display: block; color: var(--red); margin-bottom: 3px; font-size: 11px; }
 
-@media (max-width: 1200px) {
-  :root { --rail: 340px; }
+/* The pill's left cluster never shrinks, so on a narrow window drop its
+ * secondary controls rather than let them spill past the rounded edge.
+ * Transport, the view switch and the input always survive. */
+@media (max-width: 1150px) {
+  .pill-left .field[title="Zoom"] { display: none; }
+}
+
+@media (max-width: 900px) {
   .legend { display: none; }
+  .traffic-grid { grid-template-columns: 1fr; }
+  .pill-left .field { display: none; }
 }
 
 .control.choice select { width: 100%; margin-top: 6px; }
 .control.choice .fineprint { margin-top: 6px; }
 
-/* ========================================================= TOP NAVIGATION */
-.top-nav {
-  height: 48px;
-  flex: none;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  position: relative;
-  z-index: 50;
-}
-.nav-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.brand-badge {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  background: var(--blue);
-  color: #0d131a;
-  padding: 2px 7px;
-  border-radius: 4px;
-}
-.junction-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-}
-.nav-views {
-  display: flex;
-  gap: 4px;
-  background: var(--panel-2);
-  padding: 3px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-}
-.view-tab {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 14px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--dim);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.view-tab:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
-}
-.view-tab.active {
-  background: var(--blue);
-  color: #0b1118;
-  font-weight: 600;
-  box-shadow: 0 2px 8px rgba(89, 194, 255, 0.25);
-}
-.view-tab .view-icon {
-  font-size: 13px;
-}
-.tab-indicator {
-  color: var(--yellow);
-  font-size: 10px;
-  animation: pulse 1.2s infinite;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-.nav-status {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.status-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: var(--dim);
-  background: var(--panel-2);
-  padding: 3px 9px;
-  border-radius: 12px;
-  border: 1px solid var(--line);
-}
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--faint);
-}
-.status-dot.green {
-  background: var(--green);
-  box-shadow: 0 0 6px rgba(61, 220, 151, 0.6);
-}
-
-/* ==================================================== VIEW CONTAINER */
+/* ==================================================== VIEW CONTAINER
+ * No top nav any more - the pillbar at the bottom is the only chrome that's
+ * always present, so views just take the rest of the flex column body
+ * gives them. */
 .view-panel {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  height: calc(100vh - 48px);
 }
 .view-panel[hidden] {
   display: none !important;
-}
-
-#view-sim {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  height: calc(100vh - 48px);
-}
-
-#view-sim main {
-  display: grid;
-  grid-template-columns: 1fr var(--rail);
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
 }
 
 #view-sim .stage {
@@ -737,18 +757,12 @@ tr.excluded { opacity: .55; }
   min-height: 0;
 }
 
-#view-sim .voicebar {
-  flex: none;
-  height: var(--voice);
-}
-
 #view-dash {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  height: calc(100vh - 48px);
 }
 
 /* ============================================== DASHBOARD CONTAINER */
@@ -757,7 +771,7 @@ tr.excluded { opacity: .55; }
   min-height: 0;
   height: 100%;
   overflow-y: auto;
-  padding: 20px 24px 60px 24px;
+  padding: 20px 24px calc(var(--voice) + 40px) 24px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -1355,15 +1369,18 @@ h1, h2, h3, h4, .sig-title, .tab, summary, .modal-head h3,
   letter-spacing: 1.2px;
 }
 
-.tool, .simbar select, .btn-close, .btn-micro, button.tool,
-.compass-btn, .toggle, select, .card, .control, details.card,
-.sig-block, .arm-grid, .legend, .toast, .modal-card, .status-pill-small,
-.badge-good, .badge-info, .badge-bad, .badge-queued {
+/* Only elements that declare a border-colour of their own belong here.
+ * border-width/style without a colour falls back to currentColor, which on
+ * this palette is near-white ink - that's where the white boxes around the
+ * dials, the legend and the modal close button came from. */
+.tool, .btn-micro, button.tool, .compass-btn, button.toggle, select,
+.card, details.card, .junction-label, .compass-model-block, .toast,
+.modal-card, .traffic-cell, .pillbar {
   border-width: 2px !important;
   border-style: solid !important;
 }
 
-.sig-block, .arm-grid, .toast, .modal-card {
+.junction-label, .compass-model-block, .toast, .modal-card {
   background: var(--panel) !important;
 }
 
@@ -1379,6 +1396,13 @@ h1, h2, h3, h4, .sig-title, .tab, summary, .modal-head h3,
 .compass-dial {
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.04), inset 0 6px 10px rgba(0,0,0,.5) !important;
 }
+
+/* pillbar + mic stay round on purpose - the one place this theme softens */
+.pillbar, .view-switch, .view-tab.active, .pill-ask input {
+  border-radius: 999px !important;
+}
+.micbtn, #blob { border-radius: 50% !important; }
+.traffic-cell, .compass-model-block { border-radius: 12px !important; }
 
 .card:hover, .tool:hover, .compass-btn:hover {
   outline: 2px solid var(--blue);

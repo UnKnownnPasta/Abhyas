@@ -229,10 +229,10 @@ PHASE_PLANS = {
         "stages": [
             {"key": "north_south", "label": "North-south green",
              "arms": ["N", "S"], "movements": ["NS", "SN"],
-             "timing": {"green": 42, "yellow": 4, "allred": 2}},
+             "timing": {"green": 90, "yellow": 4, "allred": 2}},
             {"key": "east_west", "label": "East-west green",
              "arms": ["E", "W"], "movements": ["EW", "WE"],
-             "timing": {"green": 34, "yellow": 4, "allred": 2}},
+             "timing": {"green": 90, "yellow": 4, "allred": 2}},
         ],
     },
     "four_phase": {
@@ -241,13 +241,13 @@ PHASE_PLANS = {
                 "protected rather than filtering through gaps.",
         "stages": [
             {"key": "north", "label": "North approach green", "arms": ["N"],
-             "timing": {"green": 22, "yellow": 4, "allred": 2}},
+             "timing": {"green": 90, "yellow": 4, "allred": 2}},
             {"key": "east", "label": "East approach green", "arms": ["E"],
-             "timing": {"green": 16, "yellow": 4, "allred": 2}},
+             "timing": {"green": 90, "yellow": 4, "allred": 2}},
             {"key": "south", "label": "South approach green", "arms": ["S"],
-             "timing": {"green": 22, "yellow": 4, "allred": 2}},
+             "timing": {"green": 90, "yellow": 4, "allred": 2}},
             {"key": "west", "label": "West approach green", "arms": ["W"],
-             "timing": {"green": 16, "yellow": 4, "allred": 2}},
+             "timing": {"green": 90, "yellow": 4, "allred": 2}},
         ],
     },
 }

@@ -7,6 +7,12 @@ import sumolib
 from . import config as C
 from . import netbuild
 
+# The green bounds every path shares: the dials in controls.py, the voice
+# layer's nudges and the counterfactual sweep all clamp to these, so a
+# sentence can't reach a plan the dial refuses.
+MIN_GREEN_S = 15.0
+MAX_GREEN_S = 200.0
+
 
 class Link:
     """One controlled link at the junction."""
@@ -131,9 +137,10 @@ def baseline_plan(shape=None):
     return C.baseline_timings(shape)
 
 
-def apply_delta(plan, group, delta_seconds, min_green=8.0, max_green=120.0):
+def apply_delta(plan, group, delta_seconds,
+                min_green=MIN_GREEN_S, max_green=MAX_GREEN_S):
     """Copy of `plan` with one stage's green moved. Clamped both ends - a phase
-    under eight seconds isn't a plan anyone would sign, and the simulator will
+    under the minimum isn't a plan anyone would sign, and the simulator will
     happily report a confident number for it anyway."""
     out = {g: dict(s) for g, s in plan.items()}
     out[group]["green"] = max(min_green,

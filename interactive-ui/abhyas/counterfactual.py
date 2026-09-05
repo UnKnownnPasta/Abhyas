@@ -95,9 +95,10 @@ class Counterfactual:
         }
         if clamped:
             card["notes"].append("The requested change was clamped: a phase "
-                                 "can't go below 8 s or above 120 s of green. "
-                                 "Applied change is " + format(applied, "+.0f")
-                                 + " s.")
+                                 "can't go below " + str(int(T.MIN_GREEN_S))
+                                 + " s or above " + str(int(T.MAX_GREEN_S))
+                                 + " s of green. Applied change is "
+                                 + format(applied, "+.0f") + " s.")
 
         # per movement travel time. all twelve, not just the four the interface
         # talks about - the fleet already measures the turns.

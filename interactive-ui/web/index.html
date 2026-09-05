@@ -17,93 +17,36 @@
 </head>
 <body>
 
-<!-- ========================================================= top navigation -->
-<header class="top-nav">
-  <div class="nav-brand">
-    <span class="brand-badge">ABHYAS</span>
-    <span class="junction-title" id="junction-name">CMH Road × 100 Feet Road</span>
-  </div>
-
-  <div class="nav-views">
-    <button class="view-tab active" id="tab-sim-view" data-view="sim">
-      <span class="view-icon">🚦</span> Digital Twin (3D)
-    </button>
-    <button class="view-tab" id="tab-dash-view" data-view="dash">
-      <span class="view-icon">💻</span> CLI & Workflows Dash
-      <span class="tab-indicator" id="dash-busy-indicator" hidden>●</span>
-    </button>
-  </div>
-
-  <div class="nav-status">
-    <div class="status-badge" id="badge-wf-engine" title="Render Workflows Execution Mode">
-      <span class="status-dot green" id="wf-engine-dot"></span>
-      <span id="wf-engine-text">Render Workflows: Local</span>
-    </div>
-    <div class="status-badge" id="badge-sim-status" title="SUMO Simulation Status">
-      <span class="status-dot green" id="sim-dot"></span>
-      <span id="sim-status-text">Sim Running</span>
-    </div>
-  </div>
-</header>
-
 <!-- =================================================== VIEW 1: 3D SIMULATION -->
 <div id="view-sim" class="view-panel active">
-  <main>
-    <!-- stage ------------------------------------------------------------- -->
+  <main class="sim-main">
+    <!-- stage: the canvas owns the whole left area, everything else floats
+         on top of it ---------------------------------------------------- -->
     <section class="stage">
-      <div class="simbar">
-        <div class="simbar-group">
-          <button class="tool" data-cmd="resume" title="Run">▶</button>
-          <button class="tool" data-cmd="pause" title="Pause">❙❙</button>
-          <button class="tool" data-cmd="reset" title="Restart from baseline">↺</button>
-        </div>
-        <div class="simbar-group">
-          <label class="field"><span>Time</span><output id="sim-clock">0:00</output></label>
-        </div>
-        <div class="simbar-group">
-          <label class="field"><span>Speed</span>
-            <input type="range" id="speed" min="1" max="20" step="1" value="4"/>
-            <output id="speed-label">4×</output>
-          </label>
-        </div>
-        <div class="simbar-group">
-          <label class="field"><span>Zoom</span>
-            <input type="range" id="zoom" min="0" max="100" step="1" value="50"/>
-            <output id="zoom-label">—</output>
-          </label>
-          <button class="tool" id="fit-junction" title="Frame the junction">Junction</button>
-          <button class="tool" id="fit-network" title="Frame the whole network">Network</button>
-        </div>
-        <div class="simbar-group right">
-          <select id="scheme" title="Colour scheme">
-            <option value="real">real world</option>
-            <option value="dark" selected>dark</option>
-          </select>
-          <label class="check"><input type="checkbox" id="show-ids"/> ids</label>
-        </div>
-      </div>
-
       <div class="canvas-wrap">
         <canvas id="map"></canvas>
 
         <div class="overlay overlay-tl">
-          <div class="sig-block">
-            <div class="sig-title">Signal</div>
-            <div class="sig-phase" id="phase-name">—</div>
-            <div class="sig-count"><span id="phase-countdown">—</span><span class="unit">s to switch</span></div>
-            <div class="sig-plan" id="plan-line">—</div>
+          <div class="junction-label">
+            <span class="brand-badge">ABHYAS</span>
+            <span class="junction-title" id="junction-name">CMH Road × 100 Feet Road, Indiranagar</span>
+          </div>
+          <div class="traffic-panel">
+            <div class="traffic-grid" id="traffic-grid"></div>
           </div>
         </div>
 
         <div class="overlay overlay-tr">
-          <div class="arm-grid" id="arm-grid"></div>
+          <div class="compass-model-block">
+            <div class="compass-overlay" id="compass-overlay"></div>
+            <div class="legend" id="legend"></div>
+          </div>
         </div>
 
         <div class="overlay overlay-bl">
           <div class="scalebar"><span class="bar" id="scale-bar"></span><span id="scale-label">—</span></div>
         </div>
 
-        <div class="overlay overlay-br legend" id="legend"></div>
         <div class="toast-stack" id="toasts"></div>
         <div class="credit">Car model: "BMW M3 | Low-Poly Stylized" by kulonee, CC BY-SA 4.0</div>
       </div>
@@ -111,26 +54,44 @@
 
     <!-- rail -------------------------------------------------------------- -->
     <aside class="rail">
-      <nav class="tabs" id="tabs">
-        <button class="tab active" data-tab="controls">Controls</button>
-        <button class="tab" data-tab="versions">Versions</button>
-        <button class="tab" data-tab="results">Results</button>
-      </nav>
+      <div class="rail-select-row">
+        <select id="rail-mode-select" class="rail-mode-select">
+          <option value="controls">Control</option>
+          <option value="versions">Versions</option>
+          <option value="results">Results</option>
+        </select>
+        <span class="tag phase-tag">
+          <span id="phase-name">—</span> ·
+          <span id="phase-countdown">—</span>s
+        </span>
+        <span class="tag" id="cycle-tag">—</span>
+      </div>
 
       <!-- controls ------------------------------------------------------- -->
       <div class="tabpane" data-pane="controls">
         <div class="card">
-          <div class="card-head">
-            <h2>What-if controls</h2>
-            <span class="tag" id="cycle-tag">—</span>
-          </div>
-          <p class="fineprint">Every knob the model actually has. Ranges come
-            from the simulation, so a value it would refuse cannot be dialled in.</p>
           <div id="dir-picker" class="dir-picker"></div>
-          <div id="control-deck"></div>
+
+          <div class="signal-readout">
+            <span class="lamp" id="arm-active-lamp"></span>
+            <span class="name" id="arm-active-name">N approach</span>
+            <span class="q" id="arm-active-q">—</span>
+          </div>
+
+          <div id="master-slider"></div>
+
+          <details class="advanced-signal">
+            <summary><span>Advanced signal settings</span></summary>
+            <div id="advanced-signal-body" class="group-body"></div>
+          </details>
+
+          <div class="row-actions">
+            <button id="open-traffic-modal" class="ghost">Traffic components</button>
+            <button id="open-obstruction-modal" class="ghost">Obstructions</button>
+          </div>
           <div class="row-actions">
             <button id="reset-controls" class="ghost">Back to baseline</button>
-            <button id="commit-controls" class="primary">Save as version</button>
+            <button id="commit-controls" class="primary">Save config</button>
           </div>
         </div>
       </div>
@@ -147,9 +108,6 @@
                    placeholder="name this state — “longer NS green, cow on E”"/>
             <button type="submit" class="primary">Commit</button>
           </form>
-          <p class="fineprint">A tree, not a list: branching off one starting
-            point to try two what-ifs is the normal shape of this. Restoring
-            overwrites the live state — there is no merge.</p>
           <div id="version-tree" class="vtree"></div>
           <div id="version-diff" class="vdiff" hidden></div>
         </div>
@@ -204,44 +162,6 @@
       </div>
     </aside>
   </main>
-
-  <!-- voice ------------------------------------------------------------- -->
-  <section class="voicebar" id="voicebar">
-    <button id="mic" class="micbtn" aria-label="Speak an instruction">
-      <canvas id="blob" width="120" height="120"></canvas>
-    </button>
-
-    <div class="voicebody">
-      <div class="voicehead">
-        <span class="micstate" id="mic-state">Tap to speak</span>
-        <span class="tag" id="voice-backend" title="Where the sentence is parsed">local rules</span>
-        <span class="fineprint" id="voice-note"></span>
-      </div>
-
-      <form id="ask-form" class="ask">
-        <input id="ask" type="text" autocomplete="off" spellcheck="false"
-               placeholder="or type — “add 10 seconds to the northbound green”"/>
-        <button type="submit" class="ghost">Parse</button>
-      </form>
-
-      <div class="examples" id="examples"></div>
-
-      <div class="proposal" id="proposal" hidden>
-        <div class="proposal-head">
-          <span class="heard">“<span id="heard-text"></span>”</span>
-          <span class="tag" id="proposal-source">local rules</span>
-        </div>
-        <p class="headline" id="proposal-summary">—</p>
-        <div id="proposal-edits" class="edits"></div>
-        <div id="proposal-notes" class="notes"></div>
-        <div class="row-actions">
-          <button id="apply-proposal" class="primary">Apply to the dials</button>
-          <button id="discard-proposal" class="ghost">Discard</button>
-        </div>
-        <p class="fineprint">Nothing reaches the simulation until you accept it.</p>
-      </div>
-    </div>
-  </section>
 </div>
 
 <!-- ================================================= VIEW 2: CLI & WORKFLOWS DASH -->
@@ -476,6 +396,58 @@
   </div>
 </div>
 
+<!-- ===================================================== persistent pill bar
+     Replaces the old top nav: always on screen regardless of which view is
+     showing. Left = mic + transport + speed/zoom + view switch. Right =
+     the typed instruction + a handful of suggested-question pills. -->
+<section class="pillbar" id="voicebar">
+  <div class="pill-left">
+    <button id="mic" class="micbtn" aria-label="Speak an instruction">
+      <canvas id="blob" width="162" height="162"></canvas>
+    </button>
+    <div class="transport">
+      <button class="tool" data-cmd="resume" title="Run">▶</button>
+      <button class="tool" data-cmd="pause" title="Pause">❙❙</button>
+      <button class="tool" data-cmd="reset" title="Restart from baseline">↺</button>
+    </div>
+    <label class="field" title="Speed"><span>⚡</span>
+      <input type="range" id="speed" min="1" max="20" step="1" value="4"/>
+      <output id="speed-label">4×</output>
+    </label>
+    <label class="field" title="Zoom"><span>🔍</span>
+      <input type="range" id="zoom" min="0" max="100" step="1" value="50"/>
+      <output id="zoom-label">—</output>
+    </label>
+    <div class="view-switch">
+      <button class="view-tab active" id="tab-sim-view" data-view="sim" title="Digital Twin">🚦</button>
+      <button class="view-tab" id="tab-dash-view" data-view="dash" title="Workflows">💻
+        <span class="tab-indicator" id="dash-busy-indicator" hidden>●</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="pill-right">
+    <form id="ask-form" class="pill-ask">
+      <input id="ask" type="text" autocomplete="off" spellcheck="false"
+             placeholder="type an instruction — “add 10 seconds to the northbound green”"/>
+    </form>
+  </div>
+
+  <div class="proposal" id="proposal" hidden>
+    <div class="proposal-head">
+      <span class="heard">“<span id="heard-text"></span>”</span>
+      <span class="tag" id="proposal-source">local rules</span>
+    </div>
+    <p class="headline" id="proposal-summary">—</p>
+    <div id="proposal-edits" class="edits"></div>
+    <div id="proposal-notes" class="notes"></div>
+    <div class="row-actions">
+      <button id="apply-proposal" class="primary">Apply to the dials</button>
+      <button id="discard-proposal" class="ghost">Discard</button>
+    </div>
+  </div>
+</section>
+
 <!-- Modal for Workflow Run Details -->
 <div class="modal-backdrop" id="run-modal" hidden>
   <div class="modal-card">
@@ -487,6 +459,32 @@
       <div class="modal-meta-grid" id="modal-meta-grid"></div>
       <h4>Execution Logs</h4>
       <div class="modal-logs" id="modal-logs"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: full Traffic group (demand, arm shares, turning splits) -->
+<div class="modal-backdrop" id="traffic-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Traffic components</h3>
+      <button class="btn-close" id="btn-close-traffic-modal">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="traffic-modal-body"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: obstruction placement -->
+<div class="modal-backdrop" id="obstruction-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Obstructions</h3>
+      <button class="btn-close" id="btn-close-obstruction-modal">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="obstruction-modal-body"></div>
     </div>
   </div>
 </div>

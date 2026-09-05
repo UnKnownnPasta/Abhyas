@@ -24,7 +24,7 @@ const state = {
   busy: false,
   compareFrom: null,
   dir: 'N',              // shared focus arm: map overlay + both Controls sections
-  obstructionKind: 'cow',
+  obstructionArm: {},    // per obstruction kind: which approach to place it on
 };
 
 /* ================================================================== boot */
@@ -38,7 +38,7 @@ async function boot() {
     return;
   }
 
-  if (!$('control-deck')) {
+  if (!$('traffic-grid')) {
     let retried = false;
     try { retried = sessionStorage.getItem('abhyas-stale-reload') === '1'; } catch (e) {}
     if (retried) {
@@ -55,8 +55,8 @@ async function boot() {
   setChrome('junction-name', state.context.junction.name);
   buildLegend();
   buildArmRows();
+  buildTrafficGrid();
   setInterval(paintCompassHeadings, 150);
-  buildExamples();
   renderArchive();
   renderPlan(state.context.baseline_plan);
   if (state.context.validation) renderValidation(state.context.validation);
@@ -84,6 +84,7 @@ async function boot() {
   wireResults();
   wireViews();
   wireCliDash();
+  wireControlModals();
 
   loadSurface();
   loadVersions();
@@ -232,25 +233,61 @@ function paintCompassHeadings() {
 
 function setDir(dir) {
   state.dir = dir;
-  buildArmRows();                        // rebuilds + rewires the map compass
+  buildArmRows();                        // rebuilds + rewires the canvas compass
+  paintActiveTrafficCell();
   if (state.frame) renderFrame(state.frame);
   if (state.surface) renderSurface(state.surface); // rebuilds + rewires the Controls one
 }
 
+// The canvas-overlay compass: same widget as the Controls-pane one
+// (renderDirPicker), just placed top-right on the 3d view instead of in the
+// rail, next to the vehicle-model legend.
 function buildArmRows() {
-  const el = $('arm-grid');
-  el.innerHTML = compassHtml() +
-    '<div class="arm-row arm-row-active">' +
-      '<span class="lamp" id="arm-active-lamp"></span>' +
-      '<span class="name" id="arm-active-name">' + state.dir + ' approach</span>' +
-      '<span class="q" id="arm-active-q">—</span>' +
-    '</div>';
+  const el = $('compass-overlay');
+  if (!el) return;
+  el.innerHTML = compassHtml();
   wireCompass(el, state.dir, setDir);
+}
+
+const DIRS = ['N', 'E', 'S', 'W'];
+
+// Left panel: all four approaches at once, not just the focused one - a
+// 2x2 read of the whole junction rather than the single-arm switcher.
+function buildTrafficGrid() {
+  const el = $('traffic-grid');
+  if (!el) return;
+  el.innerHTML = DIRS.map((d) =>
+    '<div class="traffic-cell" data-dir="' + d + '">' +
+      '<div class="traffic-cell-head"><span class="lamp" id="grid-lamp-' + d +
+        '"></span><span class="traffic-cell-name">' + d + ' approach</span></div>' +
+      '<div class="traffic-cell-q" id="grid-q-' + d + '">—</div>' +
+    '</div>').join('');
+  el.onclick = (event) => {
+    const cell = event.target.closest('.traffic-cell');
+    if (cell) setDir(cell.dataset.dir);
+  };
+  paintActiveTrafficCell();
+}
+
+function paintActiveTrafficCell() {
+  document.querySelectorAll('.traffic-cell').forEach((cell) => {
+    cell.classList.toggle('active', cell.dataset.dir === state.dir);
+  });
+}
+
+function updateTrafficGrid(frame) {
+  for (const d of DIRS) {
+    const colour = frame.signal.arms?.[d];
+    const lamp = $('grid-lamp-' + d);
+    if (lamp) lamp.className = 'lamp' + (colour ? ' ' + colour : '');
+    const q = $('grid-q-' + d);
+    if (q) q.textContent = (frame.queues?.[d] ?? 0) + ' queued';
+  }
 }
 
 function renderFrame(frame) {
   window.Scene3D?.updateFrame(frame);
-  $('sim-clock').textContent = formatClock(frame.time_s);
+  if ($('sim-clock')) $('sim-clock').textContent = formatClock(frame.time_s);
   $('phase-name').textContent = frame.signal.phase_name || '—';
   $('phase-countdown').textContent = Math.max(0, Math.round(frame.signal.time_to_switch));
 
@@ -263,14 +300,14 @@ function renderFrame(frame) {
   const q = $('arm-active-q');
   if (q) q.textContent = (frame.queues?.[name] ?? 0) + ' queued';
 
+  updateTrafficGrid(frame);
   if (frame.plan) renderPlan(frame.plan);
 }
 
 function renderPlan(plan) {
-  const parts = Object.values(plan.groups).map(
-    (g) => g.label.replace(' green', '') + ' ' + g.green + 's');
-  $('plan-line').textContent = parts.join('  ·  ') + '  ·  cycle ' +
-    plan.cycle_seconds + 's';
+  // The per-approach breakdown this used to print (plan-line) was dropped -
+  // it just duplicated the cycle-tag and the master slider. cycle_seconds
+  // comes from /api/controls via renderSurface instead.
 }
 
 function formatClock(seconds) {
@@ -291,21 +328,28 @@ function wireStage() {
   canvas.addEventListener('dblclick', () => fitJunction());
   setInterval(updateStageReadout, 200);
 
-  $('fit-junction').onclick = () => fitJunction();
-  $('fit-network').onclick = () => fitNetwork();
+  // Fit-to-junction/network, the colour scheme switch and the id overlay
+  // toggle were dropped from the redesigned bottom bar - guard rather than
+  // wire, in case some future markup brings them back.
+  if ($('fit-junction')) $('fit-junction').onclick = () => fitJunction();
+  if ($('fit-network')) $('fit-network').onclick = () => fitNetwork();
   $('zoom').oninput = (event) => {
     window.Scene3D?.setZoomFraction(Number(event.target.value) / 100);
   };
-  $('scheme').onchange = (event) => {
-    state.scheme = event.target.value;
-    window.Scene3D?.setScheme(state.scheme);
-    document.querySelector('.canvas-wrap')
-      .classList.toggle('light', state.scheme === 'real');
-  };
-  $('show-ids').onchange = (event) => {
-    state.showIds = event.target.checked;
-    window.Scene3D?.setShowIds(state.showIds);
-  };
+  if ($('scheme')) {
+    $('scheme').onchange = (event) => {
+      state.scheme = event.target.value;
+      window.Scene3D?.setScheme(state.scheme);
+      document.querySelector('.canvas-wrap')
+        .classList.toggle('light', state.scheme === 'real');
+    };
+  }
+  if ($('show-ids')) {
+    $('show-ids').onchange = (event) => {
+      state.showIds = event.target.checked;
+      window.Scene3D?.setShowIds(state.showIds);
+    };
+  }
 
   for (const button of document.querySelectorAll('[data-cmd]')) {
     button.onclick = () => send(button.dataset.cmd);
@@ -316,16 +360,15 @@ function wireStage() {
     send('speed', { value });
   };
 
-  $('tabs').onclick = (event) => {
-    const tab = event.target.closest('.tab');
-    if (!tab) return;
-    for (const other of document.querySelectorAll('.tab')) {
-      other.classList.toggle('active', other === tab);
-    }
-    for (const pane of document.querySelectorAll('.tabpane')) {
-      pane.hidden = pane.dataset.pane !== tab.dataset.tab;
-    }
-  };
+  // The Controls/Versions/Results tab bar became a dropdown in the rail.
+  if ($('rail-mode-select')) {
+    $('rail-mode-select').onchange = (event) => {
+      const mode = event.target.value;
+      for (const pane of document.querySelectorAll('.tabpane')) {
+        pane.hidden = pane.dataset.pane !== mode;
+      }
+    };
+  }
 }
 
 /* ============================================================== controls */
@@ -341,10 +384,19 @@ async function loadSurface() {
 function renderDirPicker() {
   const el = $('dir-picker');
   if (!el) return;
-  el.innerHTML = '<p class="fineprint">Focus approach - drives the share dial '
-    + 'and obstructions below, and the map overlay.</p>' + compassHtml();
+  el.innerHTML = compassHtml();
   wireCompass(el, state.dir, setDir);
   paintCompassHeadings();
+}
+
+// One control id can serve N, S, E or W depending on the active plan shape:
+// paired shapes ("north_south.green") answer for two arms at once, the
+// four-way shape has one control per arm. Match on the label rather than a
+// hardcoded id, since the id's own group key varies with the shape.
+function greenControlForDir(signalControls, dir) {
+  const word = { N: 'north', S: 'south', E: 'east', W: 'west' }[dir];
+  const greens = signalControls.filter((c) => c.id.endsWith('.green'));
+  return greens.find((c) => c.label.toLowerCase().includes(word)) || greens[0];
 }
 
 function renderSurface(surface) {
@@ -353,7 +405,81 @@ function renderSurface(surface) {
   $('cycle-tag').textContent = 'cycle ' + surface.cycle_seconds + ' s';
   renderDirPicker();
 
+  const signalControls = surface.controls.filter((c) => c.group === 'Signal');
+  const trafficControls = surface.controls.filter((c) => c.group === 'Traffic');
+  const obstructionControls = surface.controls.filter((c) => c.group === 'Obstructions');
+
+  const master = $('master-slider');
+  if (master) {
+    master.innerHTML = '';
+    const green = greenControlForDir(signalControls, state.dir);
+    if (green) master.appendChild(buildControl(green));
+
+    const advanced = $('advanced-signal-body');
+    if (advanced) {
+      advanced.innerHTML = '';
+      for (const control of signalControls) {
+        if (control === green) continue;
+        advanced.appendChild(buildControl(control));
+      }
+    }
+  }
+
+  refreshTrafficModal(trafficControls);
+  refreshObstructionModal(obstructionControls);
+
+  renderLegacyControlDeck(surface);
+}
+
+function refreshTrafficModal(controls) {
+  const body = $('traffic-modal-body');
+  if (!body) return;
+  body.innerHTML = '';
+  buildTrafficSection(body, controls);
+}
+
+function refreshObstructionModal(controls) {
+  const body = $('obstruction-modal-body');
+  if (!body) return;
+  body.innerHTML = '';
+  buildObstructionPicker(body, controls);
+}
+
+function wireControlModals() {
+  const openModal = (id) => { const el = $(id); if (el) el.hidden = false; };
+  const closeModal = (id) => { const el = $(id); if (el) el.hidden = true; };
+
+  if ($('open-traffic-modal')) {
+    $('open-traffic-modal').onclick = () => openModal('traffic-modal');
+  }
+  if ($('btn-close-traffic-modal')) {
+    $('btn-close-traffic-modal').onclick = () => closeModal('traffic-modal');
+  }
+  if ($('traffic-modal')) {
+    $('traffic-modal').onclick = (e) => {
+      if (e.target === $('traffic-modal')) closeModal('traffic-modal');
+    };
+  }
+
+  if ($('open-obstruction-modal')) {
+    $('open-obstruction-modal').onclick = () => openModal('obstruction-modal');
+  }
+  if ($('btn-close-obstruction-modal')) {
+    $('btn-close-obstruction-modal').onclick = () => closeModal('obstruction-modal');
+  }
+  if ($('obstruction-modal')) {
+    $('obstruction-modal').onclick = (e) => {
+      if (e.target === $('obstruction-modal')) closeModal('obstruction-modal');
+    };
+  }
+}
+
+// The old per-group <details> deck: kept, but only rendered if the markup
+// for it is present, so a page without #control-deck (the new Control pane)
+// doesn't pay for it.
+function renderLegacyControlDeck(surface) {
   const deck = $('control-deck');
+  if (!deck) return;
   const open = new Set([...deck.querySelectorAll('details[open]')]
     .map((d) => d.dataset.group));
   deck.innerHTML = '';
@@ -386,25 +512,21 @@ function renderSurface(surface) {
 }
 
 function buildTrafficSection(body, controls) {
-  const shareId = 'demand.arm_share.' + state.dir;
-  const share = controls.find((c) => c.id === shareId);
+  // All four approach shares, not just the focused one - they renormalise
+  // against each other, so seeing one in isolation is misleading.
+  const shares = DIRS
+    .map((d) => controls.find((c) => c.id === 'demand.arm_share.' + d))
+    .filter(Boolean);
   const rest = controls.filter((c) => !c.id.startsWith('demand.arm_share.'));
 
-  if (share) {
-    const heading = document.createElement('p');
-    heading.className = 'fineprint';
-    heading.innerHTML = '<strong>' + state.dir + ' approach</strong> - the other '
-      + 'three renormalise around this one.';
-    body.appendChild(heading);
-    body.appendChild(buildControl(share));
-  }
   for (const control of rest) body.appendChild(buildControl(control));
+  for (const control of shares) body.appendChild(buildControl(control));
 }
 
 function buildObstructionPicker(body, controls) {
-  // one kind's dial per direction lives in `controls`; the type dropdown
-  // just swaps which of those the stepper below is pointed at, instead of
-  // showing all 3 kinds x 4 arms (12 sliders) stacked at once.
+  // One row per kind, each with its own arm picker: the kind dropdown that
+  // used to swap a single stepper hid the fact that a cow on N and a cow on
+  // E are separate placements.
   const kinds = [];
   const seen = new Set();
   for (const c of controls) {
@@ -413,44 +535,37 @@ function buildObstructionPicker(body, controls) {
     seen.add(kind);
     kinds.push({ kind, label: c.label.replace(/ on [NSEW]$/, '') });
   }
-  if (!kinds.some((k) => k.kind === state.obstructionKind)) {
-    state.obstructionKind = kinds[0]?.kind;
+
+  for (const { kind, label } of kinds) {
+    const arm = state.obstructionArm[kind] || state.dir;
+    const control = controls.find((c) => c.id === 'obstruction.' + kind + '.' + arm);
+    if (!control) continue;
+
+    const count = Math.round(control.value);
+    const row = document.createElement('div');
+    row.className = 'obstruction-row';
+    row.innerHTML =
+      '<span class="obstruction-name">' + escapeHtml(label) + '</span>' +
+      '<select class="obstruction-arm">' +
+        DIRS.map((d) => '<option value="' + d + '"' +
+          (d === arm ? ' selected' : '') + '>' + d + '</option>').join('') +
+      '</select>' +
+      '<div class="stepper">' +
+        '<button class="stepper-btn minus"' + (count <= control.min ? ' disabled' : '') + '>&minus;</button>' +
+        '<span class="stepper-count">' + count + '</span>' +
+        '<button class="stepper-btn plus"' + (count >= control.max ? ' disabled' : '') + '>+</button>' +
+      '</div>';
+
+    row.querySelector('.obstruction-arm').onchange = (event) => {
+      state.obstructionArm[kind] = event.target.value;
+      renderSurface(state.surface);
+    };
+    row.querySelector('.minus').onclick = () =>
+      applyEdits([{ id: control.id, value: Math.max(control.min, count - 1) }]);
+    row.querySelector('.plus').onclick = () =>
+      applyEdits([{ id: control.id, value: Math.min(control.max, count + 1) }]);
+    body.appendChild(row);
   }
-
-  const picker = document.createElement('div');
-  picker.className = 'obstruction-picker';
-  picker.innerHTML = '<select class="obstruction-kind">' +
-    kinds.map((k) => '<option value="' + escapeHtml(k.kind) + '"' +
-      (k.kind === state.obstructionKind ? ' selected' : '') + '>' +
-      escapeHtml(k.label) + '</option>').join('') +
-    '</select>';
-  picker.querySelector('select').onchange = (event) => {
-    state.obstructionKind = event.target.value;
-    renderSurface(state.surface);
-  };
-  body.appendChild(picker);
-
-  const control = controls.find((c) => c.id === 'obstruction.' + state.obstructionKind + '.' + state.dir);
-  if (!control) return;
-
-  const stepper = document.createElement('div');
-  stepper.className = 'stepper';
-  const count = Math.round(control.value);
-  stepper.innerHTML =
-    '<button class="stepper-btn minus"' + (count <= control.min ? ' disabled' : '') + '>&minus;</button>' +
-    '<span class="stepper-count">' + count + '</span>' +
-    '<button class="stepper-btn plus"' + (count >= control.max ? ' disabled' : '') + '>+</button>' +
-    '<span class="stepper-label">on ' + state.dir + ' (max ' + control.max + ')</span>';
-  stepper.querySelector('.minus').onclick = () =>
-    applyEdits([{ id: control.id, value: Math.max(control.min, count - 1) }]);
-  stepper.querySelector('.plus').onclick = () =>
-    applyEdits([{ id: control.id, value: Math.min(control.max, count + 1) }]);
-  body.appendChild(stepper);
-
-  const help = document.createElement('p');
-  help.className = 'fineprint';
-  help.textContent = control.help;
-  body.appendChild(help);
 }
 
 function buildControl(control) {
@@ -703,13 +818,13 @@ let blobPhase = 0;
 function drawBlob() {
   requestAnimationFrame(drawBlob);
   const ctx = blobCtx();
-  const size = 120, mid = size / 2;
+  const size = 162, mid = size / 2;
   ctx.clearRect(0, 0, size, size);
   blobPhase += state.listening ? 0.055 : (state.busy ? 0.04 : 0.014);
 
   const energy = state.listening ? 0.35 + state.micLevel * 0.9
                                  : (state.busy ? 0.3 : 0.12);
-  const base = 28 + (state.listening ? 4 : 0);
+  const base = 52 + (state.listening ? 6 : 0);
   const rings = [
     { r: base + 11, alpha: 0.13, speed: 0.7, lobes: 3 },
     { r: base + 5, alpha: 0.22, speed: 1.15, lobes: 4 },
@@ -740,8 +855,8 @@ function drawBlob() {
       grad.addColorStop(0, 'rgba(255,200,87,' + ring.alpha + ')');
       grad.addColorStop(1, 'rgba(127,123,255,' + ring.alpha + ')');
     } else {
-      grad.addColorStop(0, 'rgba(60,110,160,' + ring.alpha * 0.85 + ')');
-      grad.addColorStop(1, 'rgba(90,90,170,' + ring.alpha * 0.85 + ')');
+      grad.addColorStop(0, 'rgba(255,107,107,' + ring.alpha * 0.9 + ')');
+      grad.addColorStop(1, 'rgba(210,60,60,' + ring.alpha * 0.9 + ')');
     }
     ctx.fillStyle = grad;
     ctx.fill();
@@ -762,25 +877,14 @@ let sttAvailable = false;
 async function loadVoiceBackend() {
   try {
     const backend = await (await fetch('/api/voice/status')).json();
-    $('voice-backend').textContent =
-      backend.backend === 'llm' ? backend.model : 'local rules';
-    $('voice-backend').className = 'tag ' + (backend.offline ? '' : 'warn');
-    $('voice-note').textContent = backend.note;
-
     sttAvailable = !!(backend.stt && backend.stt.backend);
     $('mic').disabled = !sttAvailable;
-    if (!sttAvailable) {
-      setMicState((backend.stt && backend.stt.note) ||
-        'Voice input is off — type below', 'warn');
-    }
-  } catch (err) { /* leave the default label */ }
+  } catch (err) { /* leave the default state */ }
 }
 
-function setMicState(text, kind) {
-  const el = $('mic-state');
-  el.textContent = text;
-  el.className = 'micstate' + (kind ? ' ' + kind : '');
-}
+// The mic-state/voice-backend/voice-note strip was dropped from the pill
+// bar - the blob's own colour (see drawBlob) is the only status readout now.
+function setMicState() {}
 
 async function readMicPermission() {
   if (!navigator.permissions || !navigator.permissions.query) return 'unknown';
@@ -1025,27 +1129,6 @@ function showStatus(result) {
   toast(lines.length
     ? 'Live, this run only: ' + lines.join(' · ')
     : 'Not enough vehicles have completed a measured corridor yet.');
-}
-
-const EXAMPLES = [
-  'Add 10 seconds to the northbound green',
-  'Introduce a cow on the road from the east',
-  'Make it 30% busier',
-  'What if we gave the east-west green 15 more seconds?',
-  'Clear the obstruction',
-  'Give the pedestrians a longer crossing',
-];
-
-function buildExamples() {
-  const el = $('examples');
-  for (const text of EXAMPLES) {
-    const chip = document.createElement('button');
-    chip.className = 'chip';
-    chip.type = 'button';
-    chip.textContent = text;
-    chip.onclick = () => { $('ask').value = text; submitUtterance(text); };
-    el.appendChild(chip);
-  }
 }
 
 function wireVoice() {

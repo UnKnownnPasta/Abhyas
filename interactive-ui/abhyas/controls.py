@@ -7,8 +7,8 @@ from . import demand as D
 from . import sim
 from . import tls as T
 
-MIN_GREEN_S = 8.0
-MAX_GREEN_S = 120.0
+MIN_GREEN_S = T.MIN_GREEN_S
+MAX_GREEN_S = T.MAX_GREEN_S
 
 GROUPS = ["Signal", "Traffic", "Obstructions"]
 
