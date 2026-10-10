@@ -1,6 +1,6 @@
 # Abhyas
 
-One junction in Bengaluru - CMH Road x 100 Feet Road, Indiranagar - simulated
+An Analysis Tool made to represent One junction in Bengaluru - CMH Road x 100 Feet Road, Indiranagar - simulated
 in SUMO, driven from a console or a browser, and checked against real TomTom
 travel time data by a handful of agents that are each allowed to say "no".
 
@@ -88,8 +88,8 @@ interactive-ui/
 
 ## Vehicle models
 
-The stage picks one 3d model per vehicle class. Commit a model here and it gets
-used on the next reload, no code change:
+The stage picks one 3d model per class of vehicle. Commit a model here and it gets
+used on the next reload, no code changes:
 
 ```
 interactive-ui/web/assets/
